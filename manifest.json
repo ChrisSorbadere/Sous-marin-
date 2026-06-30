@@ -1,0 +1,17 @@
+{
+  "name": "U-Boot — Chasse en Atlantique",
+  "short_name": "U-Boot",
+  "description": "Simulation de sous-marin, Seconde Guerre mondiale : traque de convois, sonar, plongée et grenades sous-marines.",
+  "lang": "fr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#060907",
+  "theme_color": "#0d1411",
+  "icons": [
+    { "src": "./icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

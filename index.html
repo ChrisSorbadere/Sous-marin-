@@ -4,6 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <meta name="theme-color" content="#0d1411">
+<link rel="manifest" href="./manifest.json">
+<link rel="apple-touch-icon" href="./icon-192.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="U-Boot">
 <title>U-Boot — Chasse en Atlantique</title>
 <style>
   :root{
@@ -96,6 +102,16 @@
   .hint{font-size:10px;color:var(--txt-dim);line-height:1.6;margin-top:12px;
     border-top:1px solid #1c241e;padding-top:10px}
   .hint b{color:var(--txt)}
+  /* ---- comms / stations ---- */
+  #comms{position:absolute;inset:0;overflow-y:auto;padding:10px 10px 14px;
+    background:radial-gradient(120% 80% at 50% 0%,#10160f,#070a07)}
+  .stn{background:linear-gradient(#161d18,#0d120f);border:1px solid #000;
+    border-left:3px solid var(--phos-d);border-radius:3px;padding:7px 11px 8px;margin-bottom:8px}
+  .stn h3{margin:0 0 5px;font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--amber)}
+  .stn .ln{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;padding:2px 0}
+  .stn .ln b{color:var(--txt-dim);font-weight:400}
+  .stn .ln span{color:var(--txt);text-align:right}
+  .ok{color:var(--phos)!important} .amb{color:var(--amber)!important} .bad{color:var(--red)!important}
 </style>
 </head>
 <body>
@@ -104,12 +120,14 @@
   <div class="tab on" data-v="cockpit">Poste de pilotage</div>
   <div class="tab" data-v="peri">Périscope</div>
   <div class="tab" data-v="map">Carte tactique</div>
+  <div class="tab" data-v="comms">Postes</div>
 </div>
 
 <div id="stage">
   <div class="view on" data-v="cockpit"><canvas id="cvCock"></canvas></div>
   <div class="view" data-v="peri"><canvas id="cvPeri"></canvas></div>
   <div class="view" data-v="map"><canvas id="cvMap"></canvas></div>
+  <div class="view" data-v="comms"><div id="comms"></div></div>
   <div id="log"></div>
 
   <div id="ovl">
@@ -198,7 +216,7 @@ const SPEEDS=[0,2.5,5,8];   // machine settings, knots (submerged)
 const CRUSH=210;            // crush depth (m) — rated limit
 const MAXDEPTH=300;         // absolute max the boat can reach
 const PERISCOPE_DEPTH=14;   // max depth to raise periscope
-const SIM=5;                // sim seconds per real second (pacing)
+const SIM=4;                // sim seconds per real second (pacing)
 const TORP_SPD=14;          // m/s (~27 kn)
 const TORP_RANGE=3200;      // m
 
@@ -236,13 +254,14 @@ function newGame(){
           tubeReady:true, reload:0 },
     contacts:[], torps:[], booms:[],
     pingT:0, det:0, msgQ:[], cargoSunk:0, cargoTotal:1,
+    phase:"attack", explosions:[], fired:0, hits:0, shake:0,
   };
   G.terrain=genTerrain();
   // --- convoy: 1 cargo + 1 escort, approaching from the north ---
   G.contacts.push({type:"cargo", x:WORLD*0.5+260, y:WORLD*0.16,
-    hdg:Math.PI/2, spd:7, alive:true, hp:1});
+    hdg:Math.PI/2, spd:5, alive:true, hp:1});
   G.contacts.push({type:"escort", x:WORLD*0.5-360, y:WORLD*0.10,
-    hdg:Math.PI/2, spd:9, alive:true, det:0, state:"patrol",
+    hdg:Math.PI/2, spd:6, alive:true, det:0, state:"patrol",
     lkx:0,lky:0, dcT:0});
 }
 
@@ -313,7 +332,7 @@ $("#bFire").onclick=()=>{
   if(s.depth>20){ say("Lancement impossible : remonte sous 20 m.","cmd"); return; }
   G.torps.push({x:s.x+Math.cos(s.hdg)*30, y:s.y+Math.sin(s.hdg)*30,
     hdg:s.hdg, run:0});
-  s.tubeReady=false; s.reload=18; s.detSpike=(s.detSpike||0)+18;
+  s.tubeReady=false; s.reload=18; s.detSpike=(s.detSpike||0)+18; G.fired++;
   say("Torpille lancée. Tube 1 !","alarm"); ping(380,.18);
   updateFireBtn();
 };
@@ -339,11 +358,11 @@ function step(dt){
   const s=G.sub;
   G.t+=dt;
 
-  // rudder & heading
-  s.rudder=clamp(s.rudder + rud*dt*1.4 - (rud===0? Math.sign(s.rudder)*Math.min(Math.abs(s.rudder),dt*1.2):0), -1,1);
+  // rudder & heading — slow, deliberate turning
+  s.rudder=clamp(s.rudder + rud*dt*0.5 - (rud===0? Math.sign(s.rudder)*Math.min(Math.abs(s.rudder),dt*0.6):0), -1,1);
   const speedKn=SPEEDS[s.spd];
   s.vel += ((speedKn) - s.vel)*Math.min(1,dt*0.5);   // inertia
-  s.hdg = norm(s.hdg + s.rudder*0.45*dt*(0.3+s.vel/8));
+  s.hdg = norm(s.hdg + s.rudder*0.05*dt*(0.4+s.vel/6));
 
   // move (meters)
   const v=s.vel*KN;
@@ -365,7 +384,9 @@ function step(dt){
     s.depth=seabed; s.onBottom=true; sayOnce("bottom","Posé sur le fond.","cmd");
   } else { s.onBottom=false; saidOnce.bottom=0; }
   s.depth=clamp(s.depth,0,MAXDEPTH); s.depthPrev=s.depth;
-  s.ballast = clamp(50 - s.pitch*40 + (s.tDepth>s.depth?20:-20),0,100);
+  // ballast tanks: flood to dive, blow to surface, neutral when holding
+  const bTarget = (s.tDepth>s.depth+1)?90 : (s.tDepth<s.depth-1)?8 : 50;
+  s.ballast += (bTarget - s.ballast)*Math.min(1,dt*1.0);
 
   // crush-depth stress past the rated 210 m — descend deeper at your peril
   if(s.depth>CRUSH){
@@ -408,11 +429,10 @@ function step(dt){
     for(const c of G.contacts){
       if(!c.alive) continue;
       if(dist(t.x,t.y,c.x,c.y)<55){
-        t.dead=true;
-        if(c.type==="cargo"){ c.alive=false; boom(); G.cargoSunk++;
-          say("TOUCHÉ ! Le cargo coule par l'avant.","alarm");
-          checkWin(); }
-        else { c.alive=false; boom(); say("Escorte coulée !","alarm"); }
+        t.dead=true; c.alive=false; boom(); G.hits++;
+        G.explosions.push({x:c.x,y:c.y,life:1.8,max:1.8});
+        if(c.type==="cargo"){ G.cargoSunk++; say("TOUCHÉ ! Le cargo s'embrase et coule !","alarm"); onCargoSunk(); }
+        else { say("Escorte coulée !","alarm"); }
       }
     }
     if(t.run>TORP_RANGE || t.x<0||t.y<0||t.x>WORLD||t.y>WORLD) t.dead=true;
@@ -434,6 +454,17 @@ function step(dt){
   // cargo escaped?
   const cargo=G.contacts.find(c=>c.type==="cargo");
   if(cargo && cargo.fled && cargo.alive && !G.over){ lose("Le cargo a quitté la zone. Mission échouée."); }
+
+  // ---- escape phase : cargo sunk, shake or outrun the escort ----
+  if(G.phase==="escape" && !G.over){
+    const esc=G.contacts.find(c=>c.type==="escort"&&c.alive);
+    if(!esc){ win("escorte"); }
+    else if(s.x<70||s.x>WORLD-70||s.y<70||s.y>WORLD-70){ win("evasion"); }
+    else {
+      if(G.det<15 && esc.state==="patrol") G.shake+=dt; else G.shake=0;
+      if(G.shake>35) win("seme");
+    }
+  }
 
   // ---- detection accumulation (from living escorts) ----
   let detRate=-1.2; // passive decay baseline
@@ -465,6 +496,7 @@ function step(dt){
 
   // ---- depth charges damage ----
   G.booms=G.booms.filter(b=>{ b.life-=dt; return b.life>0; });
+  G.explosions=G.explosions.filter(e=>{ e.life-=dt; return e.life>0; });
 
   // hull / lose
   s.hull=clamp(s.hull,0,100);
@@ -484,7 +516,7 @@ function escortAI(c,dt){
     // steer toward last good fix (sub pos, fuzzed less as det rises)
     const fuzz=(1-G.det/100)*600;
     c.lkx=s.x+(Math.random()-.5)*fuzz; c.lky=s.y+(Math.random()-.5)*fuzz;
-    tx=c.lkx; ty=c.lky; spd=16;
+    tx=c.lkx; ty=c.lky; spd=11;
     const dM=dist(c.x,c.y,s.x,s.y);
     c.dcT-=dt;
     if(dM<340 && c.dcT<=0){
@@ -497,7 +529,7 @@ function escortAI(c,dt){
     const cargo=G.contacts.find(k=>k.type==="cargo"&&k.alive);
     if(cargo){ tx=cargo.x+Math.sin(G.t*0.3)*500; ty=cargo.y-300; }
     else { tx=WORLD*0.5; ty=WORLD*0.4; }
-    spd=9;
+    spd=6;
   }
   const a=angTo(c.x,c.y,tx,ty);
   c.hdg=norm(c.hdg+norm(a-c.hdg)*Math.min(1,dt*1.5));
@@ -527,13 +559,14 @@ function dropCharges(c){
 const saidOnce={};
 function sayOnce(key,txt,cls){ if(saidOnce[key])return; saidOnce[key]=1; say(txt,cls); }
 
-function checkWin(){
-  if(G.cargoSunk>=G.cargoTotal && !G.over){
-    // win the instant the cargo is sunk; bonus mention if escort also gone
-    win();
-  }
+function onCargoSunk(){
+  if(G.over) return;
+  const esc=G.contacts.find(c=>c.type==="escort"&&c.alive);
+  if(!esc){ win("cargo"); return; }        // nothing left to flee
+  G.phase="escape"; G.det=Math.max(G.det,55); G.shake=0;
+  say("Cargo au fond. L'escorte donne la chasse — fuyez ou disparaissez !","cmd");
 }
-function win(){ if(G.over)return; G.over=true; G.won=true; G.running=false; showEnd(true); }
+function win(reason){ if(G.over)return; G.over=true; G.won=true; G.running=false; G.winReason=reason; showEnd(true); }
 function lose(reason){ if(G.over)return; G.over=true; G.won=false; G.running=false; G.loseReason=reason; showEnd(false); }
 
 /* ---------- rendering: cockpit ---------- */
@@ -686,6 +719,12 @@ function drawMap(){
     cx.strokeStyle=`rgba(224,83,58,${b.life})`; cx.lineWidth=2*DPR;
     cx.beginPath(); cx.arc(X(b.x),Y(b.y),(1-b.life)*40*DPR+6*DPR,0,TAU); cx.stroke();
   }
+  // ship explosions
+  for(const e of G.explosions){
+    const p=1-e.life/e.max;
+    cx.strokeStyle=`rgba(232,150,50,${e.life/e.max})`; cx.lineWidth=2.5*DPR;
+    cx.beginPath(); cx.arc(X(e.x),Y(e.y),6*DPR+p*34*DPR,0,TAU); cx.stroke();
+  }
 
   // torpedoes + wakes
   for(const t of G.torps){
@@ -764,6 +803,13 @@ function drawPeri(){
       drawShipSil(cx,px,horizon,scale*DPR,c.type,c.hdg-s.hdg);
       if(Math.abs(rel)<Math.abs(cRel)){ cRel=rel; centered={c,dM}; }
     }
+    // explosions (surface)
+    for(const e of G.explosions){
+      const rel=norm(angTo(s.x,s.y,e.x,e.y)-s.hdg);
+      if(Math.abs(rel)>FOV) continue;
+      const dM=dist(s.x,s.y,e.x,e.y);
+      drawBlast(cx, half+(rel/FOV)*half, horizon, clamp(1600/dM,0.3,3)*DPR, 1-e.life/e.max);
+    }
     drawReticle(cx,w,h,horizon,false);
     cx.fillStyle="#5ff08a"; cx.font=`${11*DPR}px monospace`; cx.textAlign="left";
     const brg=Math.round((s.hdg*R2D+90+360)%360);
@@ -799,6 +845,17 @@ function drawReticle(cx,w,h,horizon,dim){
   for(let i=-3;i<=3;i++){ if(!i)continue; const y=horizon+i*24*DPR;
     cx.beginPath(); cx.moveTo(w*0.5-6*DPR,y); cx.lineTo(w*0.5+6*DPR,y); cx.stroke(); }
 }
+function drawBlast(cx,x,base,sc,prog){
+  const r=(16+prog*42)*sc, y=base-r*0.45, a=1-prog;
+  const g=cx.createRadialGradient(x,y,0,x,y,r);
+  g.addColorStop(0,`rgba(255,242,190,${a})`);
+  g.addColorStop(0.4,`rgba(240,150,40,${a})`);
+  g.addColorStop(0.8,`rgba(130,45,20,${a*0.8})`);
+  g.addColorStop(1,"rgba(40,30,30,0)");
+  cx.fillStyle=g; cx.beginPath(); cx.arc(x,y,r,0,TAU); cx.fill();
+  if(prog>0.4){ cx.fillStyle=`rgba(60,55,55,${(prog-0.4)*0.6})`;
+    cx.beginPath(); cx.arc(x,y-r*0.6,r*0.5,0,TAU); cx.fill(); }
+}
 function drawShipSil(cx,x,base,sc,type,relHdg){
   const wsh=46*sc, hsh=10*sc, beam=0.35+0.65*Math.abs(Math.sin(relHdg));
   cx.save(); cx.translate(x,base); cx.scale(beam,1); cx.fillStyle="#0d1417";
@@ -823,6 +880,54 @@ function rounded(cx,x,y,w,h,r){
   cx.arcTo(x,y+h,x,y,r); cx.arcTo(x,y,x+w,y,r); cx.closePath();
 }
 
+/* ---------- comms / station reports ---------- */
+let commsT=0;
+function updateComms(dt){
+  commsT-=dt; if(commsT>0) return; commsT=0.25;
+  const s=G.sub, el=$("#comms");
+  const car=G.contacts.filter(c=>c.type==="cargo"&&c.alive).length;
+  const esc=G.contacts.filter(c=>c.type==="escort"&&c.alive).length;
+  let near=1e9; for(const c of G.contacts){ if(c.alive) near=Math.min(near,dist(s.x,s.y,c.x,c.y)); }
+  const submerged=s.depth>5;
+  const rud=s.rudder<-0.12?"Bâbord":s.rudder>0.12?"Tribord":"Zéro";
+  const hd=String(Math.round((s.hdg*R2D+90+360)%360)).padStart(3,"0");
+  const hullCls=s.hull<30?"bad":s.hull<60?"amb":"ok";
+  const detCls=G.det>=70?"bad":G.det>=35?"amb":"ok";
+  const stn=(t,L)=>`<div class="stn"><h3>${t}</h3>${L.map(([k,v,c])=>
+    `<div class="ln"><b>${k}</b><span class="${c||''}">${v}</span></div>`).join("")}</div>`;
+  el.innerHTML=
+   stn("Torpilles",[
+     ["Tube 1", s.tubeReady?"Paré au tir":"Rechargement "+Math.ceil(Math.max(0,s.reload))+" s", s.tubeReady?"ok":"amb"],
+     ["Torpilles tirées", String(G.fired)],
+     ["Cibles touchées", String(G.hits)],
+   ])+
+   stn("Propulsion",[
+     ["Source", submerged?"Moteurs électriques":"Diesels", submerged?"ok":"amb"],
+     ["Régime", ["Stop","Lente","Moyenne","Rapide"][s.spd]],
+     ["Vitesse", SPEEDS[s.spd].toFixed(1).replace(".0","")+" nd"],
+   ])+
+   stn("Coque",[
+     ["Intégrité", Math.round(s.hull)+" %", hullCls],
+     ["État", s.hull<30?"CRITIQUE":s.hull<60?"Endommagée":"Intacte", hullCls],
+     ["Profondeur", Math.round(s.depth)+" m / cote "+Math.round(s.tDepth)+" m", s.depth>CRUSH?"bad":""],
+   ])+
+   stn("Avaries",[
+     ["Voie d'eau", s.leak>0?"ACTIVE — colmatage":"Néant", s.leak>0?"bad":"ok"],
+     ["Incendie", s.fire>0?"ACTIF":"Néant", s.fire>0?"bad":"ok"],
+     ["Ballasts", Math.round(s.ballast)+" %"+(s.ballast>70?" (noyés)":s.ballast<20?" (chassés)":" (neutre)")],
+   ])+
+   stn("Sonar",[
+     ["Contacts", (car+esc)+"  ·  "+car+" cargo / "+esc+" escorte"],
+     ["Plus proche", near<1e9?Math.round(near)+" m":"—"],
+     ["Détection ennemie", Math.round(G.det)+" %", detCls],
+   ])+
+   stn("Barre",[
+     ["Cap", hd+"°"],
+     ["Gouvernail", rud],
+     ["Assiette", s.pitch>0.05?"Plongée":s.pitch<-0.05?"Cabré":"Nulle"],
+   ]);
+}
+
 /* ---------- HUD ---------- */
 function hud(){
   const s=G.sub;
@@ -843,7 +948,8 @@ function loop(ts){
   if(G.running && !G.over){ step(dt*SIM); }
   // render the active view
   const av=$(".view.on").dataset.v;
-  if(av==="cockpit") drawCockpit(); else if(av==="peri") drawPeri(); else drawMap();
+  if(av==="cockpit") drawCockpit(); else if(av==="peri") drawPeri();
+  else if(av==="map") drawMap(); else updateComms(dt);
   hud();
   requestAnimationFrame(loop);
 }
@@ -882,11 +988,18 @@ function showEnd(won){
   const hull=Math.round(G.sub.hull);
   if(won && hull>best){ best=hull; localStorage.setItem("uboot_best",best); }
   const escortGone=!G.contacts.some(c=>c.type==="escort"&&c.alive);
+  const reasons={
+    cargo:"Cargo coulé. Mer libre, aucune escorte.",
+    escorte:"Cargo et escorte envoyés par le fond.",
+    evasion:"Cargo coulé, puis évasion hors du secteur.",
+    seme:"Cargo coulé. Vous avez semé l'escorte dans les profondeurs."
+  };
+  const winLine=reasons[G.winReason]||"Mission accomplie.";
   card.innerHTML=`
     <h1>${won?"Mission accomplie":"Mission échouée"}</h1>
     <div class="sub">${won?"Retour à la base":"Perte du bâtiment"}</div>
     <div class="res ${won?"win":"lose"}">${won
-      ? "Cargo coulé"+(escortGone?" · escorte coulée":"")+` · coque ${hull}%`
+      ? winLine+` · coque ${hull}%`
       : (G.loseReason||"Bâtiment perdu.")}</div>
     <p>${won
       ? "L'amiral vous félicite. Le convoi ennemi est désorganisé."
@@ -901,6 +1014,11 @@ function saidOnceReset(){ for(const k in saidOnce) delete saidOnce[k]; detLockSa
 /* ---------- boot ---------- */
 resize(); showBrief(); requestAnimationFrame(loop);
 })();
+</script>
+<script>
+if("serviceWorker" in navigator){
+  addEventListener("load",()=>navigator.serviceWorker.register("./sw.js").catch(()=>{}));
+}
 </script>
 </body>
 </html>
