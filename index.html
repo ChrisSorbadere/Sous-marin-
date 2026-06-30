@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#0d1411">
 <link rel="manifest" href="./manifest.json">
 <link rel="apple-touch-icon" href="./icon-192.png">
@@ -29,7 +29,8 @@
   }
   /* ---- top tabs ---- */
   .tabs{display:flex;background:linear-gradient(#1c231f,#10150f);
-    border-bottom:2px solid #000;box-shadow:0 2px 0 var(--brass-d) inset}
+    border-bottom:2px solid #000;box-shadow:0 2px 0 var(--brass-d) inset;
+    padding-top:env(safe-area-inset-top,0)}
   .tab{flex:1;text-align:center;padding:11px 6px 9px;font-size:13px;letter-spacing:.12em;
     text-transform:uppercase;color:var(--txt-dim);cursor:pointer;
     border-right:1px solid #000;font-weight:700}
@@ -51,11 +52,11 @@
   .gz.warn .v{color:var(--red)}
   /* ---- controls panel ---- */
   #ctl{background:linear-gradient(#171d19,#0c110e);border-top:2px solid #000;
-    padding:8px 8px 10px;display:flex;flex-direction:column;gap:8px}
-  .row{display:flex;gap:6px;align-items:stretch}
+    padding:6px 8px 7px;display:flex;flex-direction:column;gap:6px}
+  .row{display:flex;gap:5px;align-items:stretch}
   button.b{flex:1;background:linear-gradient(#2c352e,#171d18);color:var(--txt);
     border:1px solid #000;border-top:1px solid #3a463c;border-radius:3px;
-    padding:9px 4px;font:inherit;font-size:12px;font-weight:700;letter-spacing:.03em;
+    padding:6px 4px;font:inherit;font-size:12px;font-weight:700;letter-spacing:.03em;
     cursor:pointer;text-transform:uppercase;box-shadow:0 1px 0 #000}
   button.b:active{background:linear-gradient(#11160f,#222a24);transform:translateY(1px)}
   button.b.on{color:var(--phos);border-top-color:var(--phos-d);
@@ -64,7 +65,7 @@
     border-top-color:var(--red)}
   button.b.fire:disabled{color:#6b4b42;background:linear-gradient(#241712,#1a1009);
     border-top-color:#3a221b;cursor:default}
-  button.b.sm{flex:0 0 auto;min-width:42px;font-size:15px;padding:9px 10px}
+  button.b.sm{flex:0 0 auto;min-width:42px;font-size:15px;padding:6px 10px}
   .lbl{flex:0 0 64px;display:flex;align-items:center;justify-content:center;
     font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:var(--txt-dim);
     text-align:center;line-height:1.05}
@@ -80,7 +81,8 @@
     85%{opacity:1}100%{opacity:0}}
   /* ---- overlay (briefing / end) ---- */
   #ovl{position:absolute;inset:0;z-index:20;background:rgba(4,7,5,.94);
-    display:flex;align-items:center;justify-content:center;padding:22px}
+    display:flex;align-items:flex-start;justify-content:center;overflow-y:auto;
+    padding:calc(env(safe-area-inset-top,0px) + 16px) 16px 28px}
   #ovl.hide{display:none}
   .card{max-width:440px;width:100%;background:linear-gradient(#141a16,#0a0e0b);
     border:1px solid var(--brass-d);border-top:3px solid var(--brass);
@@ -158,10 +160,11 @@
     <button class="b" data-spd="3">Rapide</button>
   </div>
   <div class="row">
-    <div class="lbl">Ballasts</div>
-    <button class="b" data-dive="up">▲ Surface</button>
-    <button class="b" data-dive="hold">Maintien</button>
-    <button class="b" data-dive="down">▼ Plongée</button>
+    <div class="lbl">Immersion</div>
+    <button class="b" data-set="0">Surface</button>
+    <button class="b" data-set="12">Périsc.</button>
+    <button class="b sm" data-step="-15">▲</button>
+    <button class="b sm" data-step="15">▼</button>
   </div>
   <div class="row">
     <button class="b" id="bPeri">Périscope ▲</button>
@@ -303,12 +306,12 @@ document.querySelectorAll("[data-spd]").forEach(b=>b.onclick=()=>{
   document.querySelectorAll("[data-spd]").forEach(x=>x.classList.toggle("on",+x.dataset.spd===G.sub.spd));
 });
 // ballast / depth
-document.querySelectorAll("[data-dive]").forEach(b=>b.onclick=()=>{
-  const m=b.dataset.dive;
-  if(m==="down") G.sub.tDepth=clamp(G.sub.tDepth+25,0,MAXDEPTH);
-  else if(m==="up") G.sub.tDepth=clamp(G.sub.tDepth-25,0,MAXDEPTH);
-  // hold: target = current
-  else G.sub.tDepth=Math.round(G.sub.depth);
+// depth: presets (Surface/Périscope) + fine steppers
+document.querySelectorAll("[data-set]").forEach(b=>b.onclick=()=>{
+  G.sub.tDepth=clamp(+b.dataset.set,0,MAXDEPTH);
+});
+document.querySelectorAll("[data-step]").forEach(b=>b.onclick=()=>{
+  G.sub.tDepth=clamp(G.sub.tDepth + (+b.dataset.step),0,MAXDEPTH);
 });
 // periscope
 $("#bPeri").onclick=function(){
@@ -343,8 +346,8 @@ addEventListener("keydown",e=>{
   const k=e.key.toLowerCase();
   if(k==="arrowleft"||k==="q") rud=-1;
   else if(k==="arrowright"||k==="d") rud=1;
-  else if(k==="arrowdown"||k==="s"){ G.sub.tDepth=clamp(G.sub.tDepth+25,0,MAXDEPTH); }
-  else if(k==="arrowup"||k==="z"){ G.sub.tDepth=clamp(G.sub.tDepth-25,0,MAXDEPTH); }
+  else if(k==="arrowdown"||k==="s"){ G.sub.tDepth=clamp(G.sub.tDepth+15,0,MAXDEPTH); }
+  else if(k==="arrowup"||k==="z"){ G.sub.tDepth=clamp(G.sub.tDepth-15,0,MAXDEPTH); }
   else if(k===" "){ e.preventDefault(); $("#bFire").click(); }
   else if(k==="p"){ $("#bPeri").click(); }
 });
@@ -360,8 +363,9 @@ function step(dt){
 
   // rudder & heading — slow, deliberate turning
   s.rudder=clamp(s.rudder + rud*dt*0.5 - (rud===0? Math.sign(s.rudder)*Math.min(Math.abs(s.rudder),dt*0.6):0), -1,1);
-  const speedKn=SPEEDS[s.spd];
-  s.vel += ((speedKn) - s.vel)*Math.min(1,dt*0.5);   // inertia
+  const surfaced=s.depth<4;
+  const speedKn=SPEEDS[s.spd]*(surfaced?1.7:1);      // diesels run faster on the surface
+  s.vel += (speedKn - s.vel)*Math.min(1,dt*0.5);     // inertia
   s.hdg = norm(s.hdg + s.rudder*0.05*dt*(0.4+s.vel/6));
 
   // move (meters)
@@ -475,6 +479,7 @@ function step(dt){
     const near=clamp(1-dM/2600,0,1);
     if(near<=0) continue;
     let noise=0.35 + s.vel*0.55 + s.peri*1.1;
+    if(s.depth<4) noise+=2.6;                          // surfaced = spotted by lookouts
     if(s.silent) noise*=0.45;
     noise += (s.detSpike>0?2.2:0);
     noise += s.leak*0.5 + s.fire*0.4;
@@ -506,36 +511,37 @@ function step(dt){
 let detLockSaid=false;
 function escortAI(c,dt){
   const s=G.sub;
-  // state machine: patrol -> hunt (det high) -> attack run -> charges
   if(G.det>=70){ c.state="hunt"; }
   else if(G.det<25 && c.state==="hunt"){ c.state="patrol"; }
 
-  let tx,ty,spd;
+  c.fixT=(c.fixT||0)-dt;                 // periodic fix, no continuous jitter
+  let tx,ty,spd,turn;
   if(c.state==="hunt"){
-    if(!detLockSaid){ detLockSaid=true; sayOnce("lock","Ils nous ont repérés ! L'escorte vire sur nous !","alarm"); }
-    // steer toward last good fix (sub pos, fuzzed less as det rises)
-    const fuzz=(1-G.det/100)*600;
-    c.lkx=s.x+(Math.random()-.5)*fuzz; c.lky=s.y+(Math.random()-.5)*fuzz;
-    tx=c.lkx; ty=c.lky; spd=11;
+    if(!detLockSaid){ detLockSaid=true; sayOnce("lock","Ils nous ont repérés ! L'escorte fait route sur nous !","alarm"); }
+    if(c.fixT<=0){ const fuzz=(1-G.det/100)*700+120;
+      c.lkx=clamp(s.x+(Math.random()-.5)*fuzz,40,WORLD-40);
+      c.lky=clamp(s.y+(Math.random()-.5)*fuzz,40,WORLD-40); c.fixT=3.5; }
+    tx=c.lkx; ty=c.lky; spd=11; turn=0.10;
     const dM=dist(c.x,c.y,s.x,s.y);
     c.dcT-=dt;
-    if(dM<340 && c.dcT<=0){
-      c.dcT=2.2;
-      dropCharges(c);
-    }
+    if(dM<340 && c.dcT<=0){ c.dcT=3.0; dropCharges(c); }
   } else {
     detLockSaid=false;
-    // patrol: escort the cargo, weave ahead of it
-    const cargo=G.contacts.find(k=>k.type==="cargo"&&k.alive);
-    if(cargo){ tx=cargo.x+Math.sin(G.t*0.3)*500; ty=cargo.y-300; }
-    else { tx=WORLD*0.5; ty=WORLD*0.4; }
-    spd=6;
+    if(c.fixT<=0){
+      const cargo=G.contacts.find(k=>k.type==="cargo"&&k.alive);
+      if(cargo){ c.px=clamp(cargo.x+(Math.random()-.5)*900,40,WORLD-40);
+                 c.py=clamp(cargo.y-250-Math.random()*300,40,WORLD-40); c.fixT=5; }
+      else { c.px=clamp(WORLD*0.5+(Math.random()-.5)*WORLD*0.5,40,WORLD-40);
+             c.py=clamp(WORLD*0.45+(Math.random()-.5)*WORLD*0.5,40,WORLD-40); c.fixT=7; }
+    }
+    tx=c.px||WORLD*0.5; ty=c.py||WORLD*0.4; spd=6; turn=0.06;
   }
-  const a=angTo(c.x,c.y,tx,ty);
-  c.hdg=norm(c.hdg+norm(a-c.hdg)*Math.min(1,dt*1.5));
+  // steer with a limited turn rate — a ship cannot pivot on the spot
+  const da=norm(angTo(c.x,c.y,tx,ty)-c.hdg);
+  c.hdg=norm(c.hdg+clamp(da,-turn*dt,turn*dt));
   const enx=clamp(c.x+Math.cos(c.hdg)*spd*KN*dt,20,WORLD-20);
   const eny=clamp(c.y+Math.sin(c.hdg)*spd*KN*dt,20,WORLD-20);
-  if(!landAt(enx,eny)){ c.x=enx; c.y=eny; } else { c.hdg=norm(c.hdg+1.2); }
+  if(!landAt(enx,eny)){ c.x=enx; c.y=eny; } else { c.hdg=norm(c.hdg+1.0); c.fixT=0; }
 }
 function dropCharges(c){
   boom();
@@ -888,7 +894,7 @@ function updateComms(dt){
   const car=G.contacts.filter(c=>c.type==="cargo"&&c.alive).length;
   const esc=G.contacts.filter(c=>c.type==="escort"&&c.alive).length;
   let near=1e9; for(const c of G.contacts){ if(c.alive) near=Math.min(near,dist(s.x,s.y,c.x,c.y)); }
-  const submerged=s.depth>5;
+  const submerged=s.depth>4;
   const rud=s.rudder<-0.12?"Bâbord":s.rudder>0.12?"Tribord":"Zéro";
   const hd=String(Math.round((s.hdg*R2D+90+360)%360)).padStart(3,"0");
   const hullCls=s.hull<30?"bad":s.hull<60?"amb":"ok";
@@ -904,7 +910,7 @@ function updateComms(dt){
    stn("Propulsion",[
      ["Source", submerged?"Moteurs électriques":"Diesels", submerged?"ok":"amb"],
      ["Régime", ["Stop","Lente","Moyenne","Rapide"][s.spd]],
-     ["Vitesse", SPEEDS[s.spd].toFixed(1).replace(".0","")+" nd"],
+     ["Vitesse", s.vel.toFixed(1)+" nd"],
    ])+
    stn("Coque",[
      ["Intégrité", Math.round(s.hull)+" %", hullCls],
@@ -933,7 +939,7 @@ function hud(){
   const s=G.sub;
   $("#sDepth").textContent=Math.round(s.depth)+" m";
   let hd=Math.round((s.hdg*R2D+90+360)%360); $("#sHead").textContent=String(hd).padStart(3,"0");
-  $("#sSpeed").textContent=SPEEDS[s.spd].toFixed(1).replace(".0","")+" nd";
+  $("#sSpeed").textContent=s.vel.toFixed(1)+" nd";
   $("#sDet").textContent=Math.round(G.det)+"%";
   $("#sHull").textContent=Math.round(s.hull)+"%";
   $("#gDet").classList.toggle("warn",G.det>=70);
@@ -971,12 +977,11 @@ function showBrief(){
     </div>
     <button class="go" id="goBtn">Appareiller</button>
     <div class="hint">
-      <b>Onglets</b> — Poste, Périscope (vue en surface, ≤14 m), Carte.
-      <b>Machine</b> : plus on est rapide, plus on est bruyant.
-      <b>Plongée lente</b> : descendre prend du temps.
-      <b>Sous 210 m</b> : la coque souffre — voies d'eau, feu, risque d'implosion.
-      On peut toucher le fond, mais pas y traîner.<br>
-      <b>Tir</b> : remonter sous 20 m, centrer la cible au périscope (ou via le cap), tirer.
+      <b>Onglets</b> — Poste, Périscope, Carte, Postes.
+      <b>Immersion</b> : Surface (visible, diesels, plus rapide) · Périsc. (12 m, mât hissable) · ▲▼ par 15 m.
+      <b>Machine</b> : plus on file vite, plus on est bruyant ; silencieux en plongée.
+      <b>Sous 210 m</b> : la coque souffre (voies d'eau, feu, implosion) — on touche le fond mais on n'y traîne pas.<br>
+      <b>Tir</b> : passer à 12 m, centrer la cible au périscope (ou via le cap), tirer.
       <b>Clavier</b> : ←/→ barre · ↑/↓ profondeur · Espace tir · P périscope.
     </div>`;
   ovl.classList.remove("hide");
