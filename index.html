@@ -69,6 +69,9 @@
   .lbl{flex:0 0 64px;display:flex;align-items:center;justify-content:center;
     font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:var(--txt-dim);
     text-align:center;line-height:1.05}
+  /* ---- hit flash ---- */
+  #flash{position:absolute;inset:0;z-index:9;pointer-events:none;opacity:0;
+    background:radial-gradient(circle at 50% 45%, rgba(255,210,130,.75), rgba(255,120,40,.30) 38%, transparent 70%)}
   /* ---- message log ---- */
   #log{position:absolute;left:8px;right:8px;bottom:8px;pointer-events:none;
     display:flex;flex-direction:column;gap:3px;z-index:5}
@@ -131,6 +134,7 @@
   <div class="view" data-v="map"><canvas id="cvMap"></canvas></div>
   <div class="view" data-v="comms"><div id="comms"></div></div>
   <div id="log"></div>
+  <div id="flash"></div>
 
   <div id="ovl">
     <div class="card" id="card"></div>
@@ -184,18 +188,18 @@ const angTo=(ax,ay,bx,by)=>Math.atan2(by-ay,bx-ax);
 const norm=a=>{while(a<-Math.PI)a+=TAU;while(a>Math.PI)a-=TAU;return a;};
 
 /* ---------- terrain (seabed + landmasses) ---------- */
-function genTerrain(){
+function genTerrain(coastChance=0.5){
   const deep=280, blobs=[];
-  const r=Math.random();
-  if(r<0.6){                                   // ~60% of patrols feature land
-    const n = r<0.25?1:2;
-    for(let i=0;i<n;i++){
-      const side=Math.random()<0.5?-1:1;       // keep clear of the central convoy lane
-      const bx=WORLD*0.5 + side*(WORLD*0.34+Math.random()*WORLD*0.16);
-      const by=WORLD*(0.12+Math.random()*0.74);
-      blobs.push({x:bx,y:by,
-        rx:WORLD*(0.10+Math.random()*0.11),
-        ry:WORLD*(0.10+Math.random()*0.13), shoal:1.95});
+  if(Math.random()<coastChance){
+    // a coastline hugging the left or right edge (convoy lane stays clear in the centre)
+    const right=Math.random()<0.5;
+    const ex = right ? WORLD*1.18 : -WORLD*0.18;
+    blobs.push({x:ex, y:WORLD*(0.2+Math.random()*0.6),
+      rx:WORLD*0.50, ry:WORLD*(0.75+Math.random()*0.4), shoal:1.5});
+    if(Math.random()<0.55){                      // sometimes an island off that coast
+      const ix = right ? WORLD*(0.72+Math.random()*0.12) : WORLD*(0.16+Math.random()*0.12);
+      blobs.push({x:ix, y:WORLD*(0.25+Math.random()*0.5),
+        rx:WORLD*(0.07+Math.random()*0.05), ry:WORLD*(0.07+Math.random()*0.06), shoal:1.9});
     }
   }
   return {deep,blobs};
@@ -245,27 +249,88 @@ function boom(){
   src.connect(f).connect(g).connect(ac.destination);src.start();
 }
 
+/* ---------- scenarios ---------- */
+const SCENARIOS=[
+  {id:"wolf", name:"Loup solitaire",
+   line:"1 cargo · 1 escorte — coulez le cargo.",
+   merchants:1, escorts:1, air:false, need:1, coast:0.4},
+  {id:"coastal", name:"Convoi côtier",
+   line:"3 Liberty ships · 1 escorte · côte — coulez-en 2.",
+   merchants:3, escorts:1, air:false, need:2, coast:0.95},
+  {id:"atlantic", name:"Convoi de l'Atlantique",
+   line:"5 Liberty ships · 2 escortes · aviation — coulez-en 3.",
+   merchants:5, escorts:2, air:true, need:3, coast:0.45},
+];
+
 /* ---------- game state ---------- */
 let G;
-function newGame(){
+function newGame(scen){
   G={
     t:0, over:false, won:false, running:false,
-    sub:{ x:WORLD*0.5, y:WORLD*0.72, hdg:-Math.PI/2, rudder:0,
+    sub:{ x:WORLD*0.5, y:WORLD*0.78, hdg:-Math.PI/2, rudder:0,
           spd:1, vel:0, depth:18, tDepth:18, pitch:0,
           peri:0, periUp:false, silent:false, hull:100,
           ballast:50, leak:0, fire:0, fireT:0,
           tubeReady:true, reload:0 },
-    contacts:[], torps:[], booms:[],
-    pingT:0, det:0, msgQ:[], cargoSunk:0, cargoTotal:1,
+    contacts:[], torps:[], booms:[], planes:[], wrecks:[],
+    pingT:0, det:0, msgQ:[], merchSunk:0, escaped:0,
     phase:"attack", explosions:[], fired:0, hits:0, shake:0,
+    scenario:scen, need:scen.need, air:scen.air, planeT: scen.air?40:1e9,
   };
-  G.terrain=genTerrain();
-  // --- convoy: 1 cargo + 1 escort, approaching from the north ---
-  G.contacts.push({type:"cargo", x:WORLD*0.5+260, y:WORLD*0.16,
-    hdg:Math.PI/2, spd:5, alive:true, hp:1});
-  G.contacts.push({type:"escort", x:WORLD*0.5-360, y:WORLD*0.10,
-    hdg:Math.PI/2, spd:6, alive:true, det:0, state:"patrol",
-    lkx:0,lky:0, dcT:0});
+  G.terrain=genTerrain(scen.coast);
+  spawnConvoy(scen);
+}
+function spawnConvoy(scen){
+  const cx=WORLD*0.5, topY=WORLD*0.14, colGap=340, rowGap=300, cols=2;
+  for(let i=0;i<scen.merchants;i++){
+    const col=i%cols, row=Math.floor(i/cols);
+    G.contacts.push({type:"cargo", x:cx+(col-0.5)*colGap, y:topY-row*rowGap,
+      hdg:Math.PI/2, spd:5, alive:true, fled:false});
+  }
+  const epos=[[cx,topY+460],[cx-760,topY+160],[cx+760,topY+160]];
+  for(let e=0;e<scen.escorts;e++){
+    const p=epos[e]||[cx,topY+460];
+    G.contacts.push({type:"escort", x:p[0], y:p[1], hdg:Math.PI/2, spd:6,
+      alive:true, state:"patrol", fixT:0, dcT:0, lkx:0, lky:0, px:0, py:0});
+  }
+}
+
+/* ---------- aircraft (air patrols) ---------- */
+function spawnPlane(){
+  const s=G.sub, e=Math.floor(Math.random()*4); let x,y;
+  if(e===0){x=-200;y=Math.random()*WORLD;} else if(e===1){x=WORLD+200;y=Math.random()*WORLD;}
+  else if(e===2){x=Math.random()*WORLD;y=-200;} else {x=Math.random()*WORLD;y=WORLD+200;}
+  const hdg=angTo(x,y, s.x+(Math.random()-.5)*1600, s.y+(Math.random()-.5)*1600);
+  G.planes.push({x,y,hdg,spd:28,state:"patrol",dropT:0,tx:0,ty:0});
+  say("Veille radar : avion ennemi dans le secteur.","cmd");
+}
+function planeAttack(p){
+  const s=G.sub; boom(); flashScreen();
+  G.booms.push({x:s.x,y:s.y,life:.5});
+  G.explosions.push({x:s.x,y:s.y,life:1.4,max:1.4});
+  const dmg = s.depth<6?38 : s.depth<14?20 : 4;
+  s.hull-=dmg;
+  if(dmg>15){ say("Bombes d'avion — touchés !","alarm");
+    if(Math.random()<0.4){ s.leak=clamp(s.leak+1,0,3); say("Voie d'eau !","alarm"); } }
+  else say("Bombes tombées au large — vous étiez assez profond.","cmd");
+}
+function updatePlanes(dt){
+  const s=G.sub;
+  if(G.air){ G.planeT-=dt; if(G.planeT<=0 && G.planes.length<2){ spawnPlane(); G.planeT=45+Math.random()*40; } }
+  for(const p of G.planes){
+    if(p.state==="patrol"){
+      if(s.depth<14 && dist(p.x,p.y,s.x,s.y)<1100){
+        p.state="attack"; p.tx=s.x; p.ty=s.y;
+        sayOnce("air","Avion droit sur nous — plongée d'urgence !","alarm"); }
+    } else if(p.state==="attack"){
+      if(s.depth<14){ p.tx=s.x; p.ty=s.y; }
+      if(dist(p.x,p.y,p.tx,p.ty)<170 && p.dropT<=0){ planeAttack(p); p.dropT=3; p.state="leave"; saidOnce.air=0; }
+      const da=norm(angTo(p.x,p.y,p.tx,p.ty)-p.hdg); p.hdg=norm(p.hdg+clamp(da,-0.5*dt,0.5*dt));
+    }
+    if(p.dropT>0) p.dropT-=dt;
+    p.x+=Math.cos(p.hdg)*p.spd*dt; p.y+=Math.sin(p.hdg)*p.spd*dt;
+  }
+  G.planes=G.planes.filter(p=>p.x>-400&&p.x<WORLD+400&&p.y>-400&&p.y<WORLD+400);
 }
 
 /* ---------- messages ---------- */
@@ -433,9 +498,10 @@ function step(dt){
     for(const c of G.contacts){
       if(!c.alive) continue;
       if(dist(t.x,t.y,c.x,c.y)<55){
-        t.dead=true; c.alive=false; boom(); G.hits++;
-        G.explosions.push({x:c.x,y:c.y,life:1.8,max:1.8});
-        if(c.type==="cargo"){ G.cargoSunk++; say("TOUCHÉ ! Le cargo s'embrase et coule !","alarm"); onCargoSunk(); }
+        t.dead=true; c.alive=false; boom(); G.hits++; flashScreen();
+        G.explosions.push({x:c.x,y:c.y,life:2.6,max:2.6});
+        G.wrecks.push({x:c.x,y:c.y,life:7});
+        if(c.type==="cargo"){ onMerchantSunk(); }
         else { say("Escorte coulée !","alarm"); }
       }
     }
@@ -447,25 +513,26 @@ function step(dt){
   for(const c of G.contacts){
     if(!c.alive) continue;
     if(c.type==="cargo"){
-      // steams straight, mild evasion if escort gone & sub near
       const cnx=c.x+Math.cos(c.hdg)*c.spd*KN*dt, cny=c.y+Math.sin(c.hdg)*c.spd*KN*dt;
-      if(!landAt(cnx,cny)){ c.x=cnx; c.y=cny; }
-      if(c.y>WORLD-60) c.fled=true;
+      if(!landAt(cnx,cny)){ c.x=cnx; c.y=cny; } else { c.hdg=norm(c.hdg+0.3); }
+      if(c.y>WORLD-60){ c.fled=true; c.alive=false; G.escaped++; }
     } else {
       escortAI(c,dt);
     }
   }
-  // cargo escaped?
-  const cargo=G.contacts.find(c=>c.type==="cargo");
-  if(cargo && cargo.fled && cargo.alive && !G.over){ lose("Le cargo a quitté la zone. Mission échouée."); }
+  updatePlanes(dt);
 
-  // ---- escape phase : cargo sunk, shake or outrun the escort ----
+  // ---- objective / fail / escape resolution ----
+  if(G.phase==="attack" && !G.over){
+    const reachable=G.contacts.some(c=>c.type==="cargo"&&c.alive);
+    if(!reachable && G.merchSunk<G.need) lose("Le convoi a quitté la zone. Objectif manqué.");
+  }
   if(G.phase==="escape" && !G.over){
-    const esc=G.contacts.find(c=>c.type==="escort"&&c.alive);
-    if(!esc){ win("escorte"); }
+    const escorts=G.contacts.filter(c=>c.type==="escort"&&c.alive);
+    if(escorts.length===0){ win("escorte"); }
     else if(s.x<70||s.x>WORLD-70||s.y<70||s.y>WORLD-70){ win("evasion"); }
     else {
-      if(G.det<15 && esc.state==="patrol") G.shake+=dt; else G.shake=0;
+      if(G.det<15 && escorts.every(e=>e.state==="patrol")) G.shake+=dt; else G.shake=0;
       if(G.shake>35) win("seme");
     }
   }
@@ -502,6 +569,7 @@ function step(dt){
   // ---- depth charges damage ----
   G.booms=G.booms.filter(b=>{ b.life-=dt; return b.life>0; });
   G.explosions=G.explosions.filter(e=>{ e.life-=dt; return e.life>0; });
+  G.wrecks=G.wrecks.filter(w=>{ w.life-=dt; return w.life>0; });
 
   // hull / lose
   s.hull=clamp(s.hull,0,100);
@@ -528,11 +596,14 @@ function escortAI(c,dt){
   } else {
     detLockSaid=false;
     if(c.fixT<=0){
-      const cargo=G.contacts.find(k=>k.type==="cargo"&&k.alive);
-      if(cargo){ c.px=clamp(cargo.x+(Math.random()-.5)*900,40,WORLD-40);
-                 c.py=clamp(cargo.y-250-Math.random()*300,40,WORLD-40); c.fixT=5; }
+      const merch=G.contacts.filter(k=>k.type==="cargo"&&k.alive);
+      if(merch.length){
+        const mx=merch.reduce((a,k)=>a+k.x,0)/merch.length;
+        const my=merch.reduce((a,k)=>a+k.y,0)/merch.length;
+        c.px=clamp(mx+(Math.random()-.5)*1100,40,WORLD-40);
+        c.py=clamp(my+200+Math.random()*400,40,WORLD-40); c.fixT=5; }   // screen ahead of convoy
       else { c.px=clamp(WORLD*0.5+(Math.random()-.5)*WORLD*0.5,40,WORLD-40);
-             c.py=clamp(WORLD*0.45+(Math.random()-.5)*WORLD*0.5,40,WORLD-40); c.fixT=7; }
+             c.py=clamp(WORLD*0.5+(Math.random()-.5)*WORLD*0.5,40,WORLD-40); c.fixT=7; }
     }
     tx=c.px||WORLD*0.5; ty=c.py||WORLD*0.4; spd=6; turn=0.06;
   }
@@ -565,12 +636,21 @@ function dropCharges(c){
 const saidOnce={};
 function sayOnce(key,txt,cls){ if(saidOnce[key])return; saidOnce[key]=1; say(txt,cls); }
 
-function onCargoSunk(){
+function onMerchantSunk(){
   if(G.over) return;
-  const esc=G.contacts.find(c=>c.type==="escort"&&c.alive);
-  if(!esc){ win("cargo"); return; }        // nothing left to flee
-  G.phase="escape"; G.det=Math.max(G.det,55); G.shake=0;
-  say("Cargo au fond. L'escorte donne la chasse — fuyez ou disparaissez !","cmd");
+  G.merchSunk++;
+  say(`TOUCHÉ ! Liberty ship coulé (${G.merchSunk}/${G.need}).`,"alarm");
+  if(G.merchSunk>=G.need){
+    const esc=G.contacts.some(c=>c.type==="escort"&&c.alive);
+    if(!esc){ win("objectif"); return; }
+    G.phase="escape"; G.det=Math.max(G.det,55); G.shake=0;
+    say("Objectif atteint ! Décrochez — fuyez ou rendez-vous indétectable.","cmd");
+  }
+}
+function flashScreen(){
+  const f=$("#flash"); if(!f) return;
+  f.style.transition="none"; f.style.opacity="0.9";
+  requestAnimationFrame(()=>{ f.style.transition="opacity .7s ease-out"; f.style.opacity="0"; });
 }
 function win(reason){ if(G.over)return; G.over=true; G.won=true; G.running=false; G.winReason=reason; showEnd(true); }
 function lose(reason){ if(G.over)return; G.over=true; G.won=false; G.running=false; G.loseReason=reason; showEnd(false); }
@@ -725,11 +805,21 @@ function drawMap(){
     cx.strokeStyle=`rgba(224,83,58,${b.life})`; cx.lineWidth=2*DPR;
     cx.beginPath(); cx.arc(X(b.x),Y(b.y),(1-b.life)*40*DPR+6*DPR,0,TAU); cx.stroke();
   }
-  // ship explosions
+  // wrecks (fading markers where ships went down)
+  for(const wk of G.wrecks){
+    const a=clamp(wk.life/7,0,1), X1=X(wk.x),Y1=Y(wk.y),r=4*DPR;
+    cx.strokeStyle=`rgba(150,160,150,${a*0.7})`; cx.lineWidth=1.5*DPR;
+    cx.beginPath(); cx.moveTo(X1-r,Y1-r);cx.lineTo(X1+r,Y1+r);
+    cx.moveTo(X1+r,Y1-r);cx.lineTo(X1-r,Y1+r); cx.stroke();
+  }
+  // ship explosions — filled fireball
   for(const e of G.explosions){
-    const p=1-e.life/e.max;
-    cx.strokeStyle=`rgba(232,150,50,${e.life/e.max})`; cx.lineWidth=2.5*DPR;
-    cx.beginPath(); cx.arc(X(e.x),Y(e.y),6*DPR+p*34*DPR,0,TAU); cx.stroke();
+    const p=1-e.life/e.max, r=(8+p*40)*DPR, a=e.life/e.max;
+    const g=cx.createRadialGradient(X(e.x),Y(e.y),0,X(e.x),Y(e.y),r);
+    g.addColorStop(0,`rgba(255,235,160,${a})`);
+    g.addColorStop(.5,`rgba(240,140,40,${a*0.85})`);
+    g.addColorStop(1,"rgba(120,40,20,0)");
+    cx.fillStyle=g; cx.beginPath(); cx.arc(X(e.x),Y(e.y),r,0,TAU); cx.fill();
   }
 
   // torpedoes + wakes
@@ -762,7 +852,19 @@ function drawMap(){
     // label when clear enough
     if(clarity>0.5){ cx.fillStyle=c.type==="escort"?"#e0533a":"#e8b94a";
       cx.font=`${9*DPR}px monospace`; cx.textAlign="center";
-      cx.fillText(c.type==="escort"?"ESCORTE":"CARGO",px,py-9*DPR); }
+      cx.fillText(c.type==="escort"?"ESCORTE":"LIBERTY",px,py-9*DPR); }
+  }
+
+  // aircraft
+  for(const p of G.planes){
+    const px=X(p.x),py=Y(p.y), atk=p.state==="attack";
+    cx.save(); cx.translate(px,py); cx.rotate(p.hdg);
+    cx.fillStyle= atk?"#ff7a4a":"#cfe0d2";
+    cx.beginPath(); cx.moveTo(10*DPR,0); cx.lineTo(-5*DPR,-5*DPR); cx.lineTo(-2*DPR,0); cx.lineTo(-5*DPR,5*DPR); cx.closePath(); cx.fill();
+    cx.fillRect(-1*DPR,-9*DPR,2*DPR,18*DPR);   // wings
+    cx.restore();
+    if(atk){ cx.strokeStyle="rgba(255,122,74,.5)"; cx.lineWidth=1*DPR;
+      cx.beginPath(); cx.arc(px,py,12*DPR,0,TAU); cx.stroke(); }
   }
 
   // own sub
@@ -779,9 +881,12 @@ function drawMap(){
   cx.lineTo(sx+Math.cos(s.hdg)*60*DPR,sy+Math.sin(s.hdg)*60*DPR); cx.stroke();
   cx.setLineDash([]);
 
-  // compass label
+  // compass + objective
   cx.fillStyle="rgba(95,240,138,.5)"; cx.font=`${10*DPR}px monospace`;
   cx.textAlign="left"; cx.fillText("N",ox+m/2-3*DPR,oy+12*DPR);
+  cx.textAlign="left"; cx.fillStyle="rgba(232,185,74,.85)"; cx.font=`${11*DPR}px monospace`;
+  const obj = G.phase==="escape" ? "DÉCROCHER" : `Coulés ${G.merchSunk}/${G.need}`;
+  cx.fillText(obj, ox+8*DPR, oy+m-10*DPR);
 }
 
 /* ---------- rendering: periscope ---------- */
@@ -824,7 +929,7 @@ function drawPeri(){
     cx.fillText("PÉRISCOPE  "+Math.round(s.depth)+" m", w-12*DPR, 22*DPR);
     if(centered && Math.abs(cRel)<6*D2R){
       cx.textAlign="center"; cx.fillStyle="#e8b94a";
-      cx.fillText((centered.c.type==="escort"?"ESCORTE":"CARGO")+" — "+Math.round(centered.dM)+" m",
+      cx.fillText((centered.c.type==="escort"?"ESCORTE":"LIBERTY")+" — "+Math.round(centered.dM)+" m",
         w*0.5, horizon-78*DPR);
       const inRange=centered.dM<TORP_RANGE;
       cx.fillStyle=inRange?"#e0533a":"#7d8a7c";
@@ -923,9 +1028,16 @@ function updateComms(dt){
      ["Ballasts", Math.round(s.ballast)+" %"+(s.ballast>70?" (noyés)":s.ballast<20?" (chassés)":" (neutre)")],
    ])+
    stn("Sonar",[
-     ["Contacts", (car+esc)+"  ·  "+car+" cargo / "+esc+" escorte"],
+     ["Contacts", (car+esc)+"  ·  "+car+" liberty / "+esc+" escorte"],
      ["Plus proche", near<1e9?Math.round(near)+" m":"—"],
      ["Détection ennemie", Math.round(G.det)+" %", detCls],
+   ].concat(G.air?[["Veille aérienne",
+       G.planes.some(p=>p.state==="attack")?"AVION EN ATTAQUE":G.planes.length?G.planes.length+" en vue":"RAS",
+       G.planes.some(p=>p.state==="attack")?"bad":G.planes.length?"amb":"ok"]]:[]))+
+   stn("Mission",[
+     ["Objectif", "Couler "+G.need+" navire(s)"],
+     ["Coulés", G.merchSunk+" / "+G.need, G.merchSunk>=G.need?"ok":""],
+     ["Phase", G.phase==="escape"?"Décrochage":"Attaque", G.phase==="escape"?"amb":""],
    ])+
    stn("Barre",[
      ["Cap", hd+"°"],
@@ -951,6 +1063,7 @@ function hud(){
 let last=0;
 function loop(ts){
   const dt=Math.min(0.05,(ts-last)/1000)||0; last=ts;
+  if(!G){ requestAnimationFrame(loop); return; }   // chooser open, no game yet
   if(G.running && !G.over){ step(dt*SIM); }
   // render the active view
   const av=$(".view.on").dataset.v;
@@ -962,42 +1075,49 @@ function loop(ts){
 
 /* ---------- overlays ---------- */
 const ovl=$("#ovl"), card=$("#card");
-function showBrief(){
-  G=undefined; newGame(); G.running=false;
-  card.innerHTML=`
-    <h1>U-552 · Atlantique Nord</h1>
-    <div class="sub">Patrouille — Octobre 1941</div>
-    <p>Un convoi marchand a été signalé au nord de votre position. L'amiral attend
-       que vous coupiez la route ravitaillement de l'ennemi.</p>
-    <div class="obj">
-      OBJECTIF : <b>couler le cargo</b> avant qu'il ne quitte la zone.<br>
-      MENACE : un <b>destroyer d'escorte</b> patrouille. S'il vous repère,
-      il lâchera ses grenades sous-marines. <b>Plongez et faites silence</b> pour
-      le semer — ou posez-vous sur le fond.
-    </div>
-    <button class="go" id="goBtn">Appareiller</button>
+const COMMON_HINT=`
     <div class="hint">
       <b>Onglets</b> — Poste, Périscope, Carte, Postes.
       <b>Immersion</b> : Surface (visible, diesels, plus rapide) · Périsc. (12 m, mât hissable) · ▲▼ par 15 m.
       <b>Machine</b> : plus on file vite, plus on est bruyant ; silencieux en plongée.
-      <b>Sous 210 m</b> : la coque souffre (voies d'eau, feu, implosion) — on touche le fond mais on n'y traîne pas.<br>
+      <b>Sous 210 m</b> : la coque souffre (voies d'eau, feu, implosion).
+      <b>Aviation</b> : si on est trop peu profond, les avions repèrent et bombardent — plongez vite.<br>
       <b>Tir</b> : passer à 12 m, centrer la cible au périscope (ou via le cap), tirer.
       <b>Clavier</b> : ←/→ barre · ↑/↓ profondeur · Espace tir · P périscope.
     </div>`;
+function showBrief(){
+  G=undefined;
+  card.innerHTML=`
+    <h1>U-552 · Atlantique Nord</h1>
+    <div class="sub">Choisissez votre patrouille</div>
+    <p>L'amiral vous propose plusieurs missions. À chacune son convoi, ses escortes et ses dangers.</p>
+    <div id="scenList"></div>
+    ${COMMON_HINT}`;
+  const list=card.querySelector("#scenList");
+  SCENARIOS.forEach(sc=>{
+    const b=document.createElement("button");
+    b.className="go"; b.style.marginBottom="9px"; b.style.textAlign="left";
+    b.innerHTML=`<span style="color:var(--amber)">${sc.name}</span><br>`+
+                `<span style="font-size:11px;color:var(--txt-dim);letter-spacing:.04em;text-transform:none">${sc.line}</span>`;
+    b.onclick=()=>startMission(sc);
+    list.appendChild(b);
+  });
   ovl.classList.remove("hide");
-  $("#goBtn").onclick=()=>{ audio(); ovl.classList.add("hide"); G.running=true; resize();
-    say("En plongée. Cap au nord, machine lente.","cmd"); };
+}
+function startMission(sc){
+  audio(); saidOnceReset(); newGame(sc);
+  ovl.classList.add("hide"); G.running=true; resize();
+  say(`Patrouille « ${sc.name} ». En plongée, cap au nord.`,"cmd");
 }
 function showEnd(won){
   let best=+(localStorage.getItem("uboot_best")||0);
   const hull=Math.round(G.sub.hull);
   if(won && hull>best){ best=hull; localStorage.setItem("uboot_best",best); }
-  const escortGone=!G.contacts.some(c=>c.type==="escort"&&c.alive);
   const reasons={
-    cargo:"Cargo coulé. Mer libre, aucune escorte.",
-    escorte:"Cargo et escorte envoyés par le fond.",
-    evasion:"Cargo coulé, puis évasion hors du secteur.",
-    seme:"Cargo coulé. Vous avez semé l'escorte dans les profondeurs."
+    objectif:"Objectif atteint. Plus aucune escorte en vue.",
+    escorte:"Objectif atteint et escorte(s) coulée(s).",
+    evasion:"Objectif atteint, puis évasion hors du secteur.",
+    seme:"Objectif atteint. Vous avez semé l'escorte dans les profondeurs."
   };
   const winLine=reasons[G.winReason]||"Mission accomplie.";
   card.innerHTML=`
@@ -1007,7 +1127,7 @@ function showEnd(won){
       ? winLine+` · coque ${hull}%`
       : (G.loseReason||"Bâtiment perdu.")}</div>
     <p>${won
-      ? "L'amiral vous félicite. Le convoi ennemi est désorganisé."
+      ? `Navires coulés : ${G.merchSunk}. L'amiral vous félicite.`
       : "Les survivants seront recueillis... peut-être."}</p>
     <div class="obj">Meilleure coque ramenée : <b>${best}%</b></div>
     <button class="go" id="goBtn">Nouvelle patrouille</button>`;
