@@ -69,6 +69,13 @@
   .lbl{flex:0 0 64px;display:flex;align-items:center;justify-content:center;
     font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:var(--txt-dim);
     text-align:center;line-height:1.05}
+  /* ---- periscope scope controls ---- */
+  #scopeCtl{position:absolute;left:0;right:0;bottom:10px;display:flex;justify-content:center;
+    gap:8px;pointer-events:none;z-index:6}
+  #scopeCtl button{pointer-events:auto;background:rgba(10,16,12,.78);color:var(--phos);
+    border:1px solid var(--phos-d);border-radius:4px;padding:8px 14px;font:inherit;font-size:12px;
+    font-weight:700;letter-spacing:.05em;text-transform:uppercase}
+  #scopeCtl button:active{background:rgba(20,40,28,.9)}
   /* ---- hit flash ---- */
   #flash{position:absolute;inset:0;z-index:9;pointer-events:none;opacity:0;
     background:radial-gradient(circle at 50% 45%, rgba(255,210,130,.75), rgba(255,120,40,.30) 38%, transparent 70%)}
@@ -130,7 +137,14 @@
 
 <div id="stage">
   <div class="view on" data-v="cockpit"><canvas id="cvCock"></canvas></div>
-  <div class="view" data-v="peri"><canvas id="cvPeri"></canvas></div>
+  <div class="view" data-v="peri"><canvas id="cvPeri"></canvas>
+    <div id="scopeCtl">
+      <button id="scopeL">◄ Scope</button>
+      <button id="scopeTDC">TDC</button>
+      <button id="scopeC">Cap</button>
+      <button id="scopeR">Scope ►</button>
+    </div>
+  </div>
   <div class="view" data-v="map"><canvas id="cvMap"></canvas></div>
   <div class="view" data-v="comms"><div id="comms"></div></div>
   <div id="log"></div>
@@ -147,6 +161,7 @@
   <div class="gz"><div class="l">Vitesse</div><div class="v" id="sSpeed">0</div></div>
   <div class="gz" id="gDet"><div class="l">Détection</div><div class="v" id="sDet">0%</div></div>
   <div class="gz" id="gHull"><div class="l">Coque</div><div class="v" id="sHull">100%</div></div>
+  <div class="gz" id="gBatt"><div class="l">Batterie</div><div class="v" id="sBatt">100%</div></div>
 </div>
 
 <div id="ctl">
@@ -173,7 +188,8 @@
   <div class="row">
     <button class="b" id="bPeri">Périscope ▲</button>
     <button class="b" id="bSilent">Silence</button>
-    <button class="b fire" id="bFire">Lancer torpille</button>
+    <button class="b fire" id="bFire">Feu</button>
+    <button class="b fire" id="bSalvo">Salve</button>
   </div>
 </div>
 
@@ -202,15 +218,26 @@ function genTerrain(coastChance=0.5){
         rx:WORLD*(0.07+Math.random()*0.05), ry:WORLD*(0.07+Math.random()*0.06), shoal:1.9});
     }
   }
+  // occasional treacherous reefs (shallow patches that don't break the surface)
+  const nReef=Math.random()<0.5?(Math.random()<0.4?2:1):0;
+  for(let i=0;i<nReef;i++){
+    blobs.push({x:WORLD*(0.2+Math.random()*0.6), y:WORLD*(0.2+Math.random()*0.6),
+      rx:WORLD*(0.05+Math.random()*0.05), ry:WORLD*(0.05+Math.random()*0.05),
+      shoal:2.2, reef:true, minD:14+Math.random()*14});
+  }
   return {deep,blobs};
 }
 function seabedAt(x,y){
   const T=G.terrain; let dep=T.deep;
   for(const b of T.blobs){
     const dx=(x-b.x)/b.rx, dy=(y-b.y)/b.ry, d=Math.sqrt(dx*dx+dy*dy);
-    if(d<1) return 0;                            // land
-    const t=clamp((d-1)/(b.shoal-1),0,1);        // shoaling toward shore
-    dep=Math.min(dep, 10*(1-t)+T.deep*t);
+    if(b.reef){                                   // shallow patch, never breaks the surface
+      if(d<b.shoal){ const t=clamp(d/b.shoal,0,1); dep=Math.min(dep, b.minD+(T.deep-b.minD)*t); }
+    } else {
+      if(d<1) return 0;                           // land
+      const t=clamp((d-1)/(b.shoal-1),0,1);
+      dep=Math.min(dep, 10*(1-t)+T.deep*t);
+    }
   }
   return dep;
 }
@@ -249,6 +276,73 @@ function boom(){
   src.connect(f).connect(g).connect(ac.destination);src.start();
 }
 
+/* ---------- environment : weather + time of day ---------- */
+const VIS_BASE=WORLD*1.15;          // clear-day visual range (m)
+const HYDRO_BASE=5200;              // passive sonar reach (m)
+const WEATHERS=[
+  {id:"clear", name:"Ciel clair",      vis:1.00, sea:0.15, fog:0.00},
+  {id:"haze",  name:"Brume",           vis:0.55, sea:0.25, fog:0.30},
+  {id:"fog",   name:"Brouillard",      vis:0.26, sea:0.20, fog:0.75},
+  {id:"rain",  name:"Pluie",           vis:0.48, sea:0.45, fog:0.35},
+  {id:"storm", name:"Gros temps",      vis:0.40, sea:0.85, fog:0.30},
+];
+function todInfo(h){
+  h=((h%24)+24)%24;
+  if(h<5||h>=21) return {label:"Nuit", light:0.16};
+  if(h<7)        return {label:"Aube", light:0.50};
+  if(h<18)       return {label:"Jour", light:1.00};
+  if(h<19.5)     return {label:"Crépuscule", light:0.55};
+  return {label:"Tombée de la nuit", light:0.30};
+}
+function currentVisRange(){
+  const w=G.env.weather, t=todInfo(G.env.clock);
+  return clamp(VIS_BASE*w.vis*t.light, 650, WORLD*1.2);
+}
+function grid(x,y){
+  const col="ABCDEFGH"[clamp(Math.floor(x/WORLD*8),0,7)];
+  const row=clamp(Math.floor(y/WORLD*8),0,7)+1;
+  return col+row+""+(10+Math.floor(Math.random()*89));
+}
+
+/* ---------- radio intelligence (uncertain, sometimes false) ---------- */
+function aliveMerch(){ return G.contacts.filter(c=>c.type==="cargo"&&c.alive); }
+function centroid(a){ return {x:a.reduce((s,k)=>s+k.x,0)/a.length, y:a.reduce((s,k)=>s+k.y,0)/a.length}; }
+function radioReport(){
+  const m=aliveMerch();
+  const bogus = Math.random()<0.22 || m.length===0;
+  let x,y,course;
+  if(!bogus){
+    const c=centroid(m), err=900+Math.random()*800;
+    x=clamp(c.x+(Math.random()-.5)*err,200,WORLD-200);
+    y=clamp(c.y+(Math.random()-.5)*err,200,WORLD-200);
+    course=m[0].hdg+(Math.random()-.5)*0.7;
+  } else {
+    x=Math.random()*WORLD; y=Math.random()*WORLD; course=Math.random()*TAU;
+  }
+  G.intel.push({x,y,course,time:G.t,r:800+Math.random()*600});
+  if(G.intel.length>4) G.intel.shift();
+  say("Radio B.d.U. : convoi signalé secteur "+grid(x,y)+".","cmd");
+}
+
+/* ---------- passive sonar (hydrophone) — bearings only ---------- */
+let hydroT=0;
+function updateHydrophone(dt){
+  hydroT-=dt; if(hydroT>0) return; hydroT=0.5;
+  G.sound=[];
+  const s=G.sub;
+  if(s.depth<4){ return; }                       // surfaced: own wash drowns the hydrophone
+  const range=clamp(HYDRO_BASE - s.vel*520, 900, HYDRO_BASE);
+  for(const c of G.contacts){
+    if(!c.alive) continue;
+    const dM=dist(s.x,s.y,c.x,c.y);
+    if(dM>range) continue;
+    if(c.berr===undefined) c.berr=0;
+    c.berr=clamp(c.berr+(Math.random()-.5)*0.03,-0.18,0.18);  // slowly drifting bearing error
+    const err=(dM/range)*0.14 + G.env.weather.sea*0.05;
+    G.sound.push({b:angTo(s.x,s.y,c.x,c.y)+c.berr*err*6, strong:dM<2300, type:c.type});
+  }
+}
+
 /* ---------- scenarios ---------- */
 const SCENARIOS=[
   {id:"wolf", name:"Loup solitaire",
@@ -265,33 +359,73 @@ const SCENARIOS=[
 /* ---------- game state ---------- */
 let G;
 function newGame(scen){
+  const weather=WEATHERS[Math.floor(Math.random()*WEATHERS.length)];
+  const clock=4+Math.random()*16;                 // start anywhere from before dawn to evening
   G={
     t:0, over:false, won:false, running:false,
-    sub:{ x:WORLD*0.5, y:WORLD*0.78, hdg:-Math.PI/2, rudder:0,
+    sub:{ x:WORLD*0.5, y:WORLD*0.5, hdg:-Math.PI/2, rudder:0,
           spd:1, vel:0, depth:18, tDepth:18, pitch:0,
           peri:0, periUp:false, silent:false, hull:100,
           ballast:50, leak:0, fire:0, fireT:0,
-          tubeReady:true, reload:0 },
-    contacts:[], torps:[], booms:[], planes:[], wrecks:[],
-    pingT:0, det:0, msgQ:[], merchSunk:0, escaped:0,
+          tubes:[{loaded:true,rt:0},{loaded:true,rt:0},{loaded:true,rt:0},{loaded:true,rt:0}],
+          reserve:10, tdc:{on:false,tgt:null,valid:false,gyro:0,brg:0,rng:0,spd:0,crs:0},
+          batt:100, scopeRel:0, scope:-Math.PI/2 },
+    contacts:[], torps:[], booms:[], planes:[], wrecks:[], pings:[], mines:[],
+    intel:[], sound:[], scopeRot:0, mineZone:null,
+    pingT:0, det:0, merchSunk:0, escaped:0, patrolTons:0,
+    convoyBase:0, zig:0, zigDir:1, zigT:18,
     phase:"attack", explosions:[], fired:0, hits:0, shake:0,
-    scenario:scen, need:scen.need, air:scen.air, planeT: scen.air?40:1e9,
+    scenario:scen, need:scen.need, air:scen.air,
+    planeT: scen.air?150:1e9,                      // air patrols are now rare
+    radioT:5,
+    env:{ weather, clock },
   };
   G.terrain=genTerrain(scen.coast);
   spawnConvoy(scen);
+  spawnHazards(scen);
 }
 function spawnConvoy(scen){
-  const cx=WORLD*0.5, topY=WORLD*0.14, colGap=340, rowGap=300, cols=2;
+  // sub starts mid-sector; convoy placed elsewhere on a transit course — you must FIND it
+  G.sub.x=WORLD*(0.3+Math.random()*0.4); G.sub.y=WORLD*(0.55+Math.random()*0.25);
+  let cxc,cyc,dd,tries=0;
+  do { G.sub.x=WORLD*(0.3+Math.random()*0.4); G.sub.y=WORLD*(0.55+Math.random()*0.25); tries++; }
+  while(seabedAt(G.sub.x,G.sub.y)<60 && tries<40);            // start in deep water
+  tries=0;
+  do { cxc=WORLD*(0.15+Math.random()*0.7); cyc=WORLD*(0.1+Math.random()*0.45);
+       dd=dist(cxc,cyc,G.sub.x,G.sub.y); tries++; }
+  while((dd<2600 || seabedAt(cxc,cyc)<60) && tries<60);
+  const course=angTo(cxc,cyc, WORLD*(0.2+Math.random()*0.6), WORLD*(0.85));
+  G.convoyBase=course;
+  const along=course, beam=course+Math.PI/2, cols=2;
   for(let i=0;i<scen.merchants;i++){
     const col=i%cols, row=Math.floor(i/cols);
-    G.contacts.push({type:"cargo", x:cx+(col-0.5)*colGap, y:topY-row*rowGap,
-      hdg:Math.PI/2, spd:5, alive:true, fled:false});
+    const ox=Math.cos(beam)*(col-0.5)*340 + Math.cos(along)*-row*300;
+    const oy=Math.sin(beam)*(col-0.5)*340 + Math.sin(along)*-row*300;
+    G.contacts.push({type:"cargo", x:clamp(cxc+ox,100,WORLD-100), y:clamp(cyc+oy,100,WORLD-100),
+      hdg:course, spd:5, alive:true, fled:false, tons:6000+Math.floor(Math.random()*4)*1000});
   }
-  const epos=[[cx,topY+460],[cx-760,topY+160],[cx+760,topY+160]];
   for(let e=0;e<scen.escorts;e++){
-    const p=epos[e]||[cx,topY+460];
-    G.contacts.push({type:"escort", x:p[0], y:p[1], hdg:Math.PI/2, spd:6,
-      alive:true, state:"patrol", fixT:0, dcT:0, lkx:0, lky:0, px:0, py:0});
+    const side=(e%2?1:-1), lead=(e===0);
+    const ox=Math.cos(along)*(lead?700:200)+Math.cos(beam)*side*760;
+    const oy=Math.sin(along)*(lead?700:200)+Math.sin(beam)*side*760;
+    G.contacts.push({type:"escort", x:clamp(cxc+ox,60,WORLD-60), y:clamp(cyc+oy,60,WORLD-60),
+      hdg:course, spd:6, alive:true, state:"patrol", fixT:0, dcT:0, lkx:0, lky:0, px:0, py:0, tons:1300});
+  }
+}
+/* ---------- hazards : minefields near coasts ---------- */
+function spawnHazards(scen){
+  const coast=G.terrain.blobs.find(b=>!b.reef && b.rx>=WORLD*0.4);
+  if(coast && (scen.id==="coastal" || Math.random()<0.4)){
+    // lay a minefield just seaward of the coast
+    const towardCenter = coast.x>WORLD*0.5 ? -1 : 1;
+    const zx=clamp(coast.x + towardCenter*coast.rx*1.25, WORLD*0.12, WORLD*0.88);
+    const zy=WORLD*(0.3+Math.random()*0.4), zr=WORLD*0.13;
+    G.mineZone={x:zx,y:zy,r:zr};
+    for(let i=0;i<14;i++){
+      const a=Math.random()*TAU, rr=Math.sqrt(Math.random())*zr;
+      G.mines.push({x:zx+Math.cos(a)*rr, y:zy+Math.sin(a)*rr, live:true});
+    }
+    say("Renseignement : champ de mines signalé dans le secteur.","cmd");
   }
 }
 
@@ -316,7 +450,7 @@ function planeAttack(p){
 }
 function updatePlanes(dt){
   const s=G.sub;
-  if(G.air){ G.planeT-=dt; if(G.planeT<=0 && G.planes.length<2){ spawnPlane(); G.planeT=45+Math.random()*40; } }
+  if(G.air){ G.planeT-=dt; if(G.planeT<=0 && G.planes.length<1){ spawnPlane(); G.planeT=200+Math.random()*160; } }
   for(const p of G.planes){
     if(p.state==="patrol"){
       if(s.depth<14 && dist(p.x,p.y,s.x,s.y)<1100){
@@ -362,13 +496,19 @@ function bindHold(sel,on,off){
 bindHold('[data-h="bab"]',()=>rud=-1,()=>rud=0);
 bindHold('[data-h="tri"]',()=>rud=1,()=>rud=0);
 $('[data-act="rudderC"]').onclick=()=>{ G.sub.rudder=0; rud=0; };
+// periscope rotation (independent of course)
+bindHold("#scopeL",()=>G.scopeRot=-1,()=>G.scopeRot=0);
+bindHold("#scopeR",()=>G.scopeRot=1,()=>G.scopeRot=0);
+$("#scopeC").onclick=()=>{ G.sub.scopeRel=0; G.scopeRot=0; };
+$("#scopeTDC").onclick=toggleTDC;
 // machine
+function syncSpeedBtns(){ document.querySelectorAll("[data-spd]").forEach(x=>x.classList.toggle("on",+x.dataset.spd===G.sub.spd)); }
 document.querySelectorAll("[data-spd]").forEach(b=>b.onclick=()=>{
   audio();
   let s=+b.dataset.spd;
   if(G.sub.silent && s>1){ s=1; say("Plongée silencieuse : vitesse limitée.","cmd"); }
-  G.sub.spd=s;
-  document.querySelectorAll("[data-spd]").forEach(x=>x.classList.toggle("on",+x.dataset.spd===G.sub.spd));
+  if(G.sub.depth>=4 && G.sub.batt<=1 && s>1){ s=1; say("Batterie à plat — vitesse réduite.","cmd"); }
+  G.sub.spd=s; syncSpeedBtns();
 });
 // ballast / depth
 // depth: presets (Surface/Périscope) + fine steppers
@@ -393,18 +533,91 @@ $("#bSilent").onclick=function(){
     say("Plongée silencieuse engagée.","cmd"); }
   else say("Fin du silence.","cmd");
 };
-// fire
-$("#bFire").onclick=()=>{
+// --- torpedo firing : 4 bow tubes, reserve reloads, optional TDC lead ---
+function loadedTubes(){ return G.sub.tubes.filter(t=>t.loaded).length; }
+function torpRemaining(){ return G.sub.tubes.filter(t=>t.loaded||t.rt>0).length + G.sub.reserve; }
+function launchTorp(aim){
+  const s=G.sub;
+  const r=Math.random();
+  const fault = r<0.05 ? "premature" : (r<0.14 ? "dud" : null);   // ~5% prématurée, ~9% raté
+  G.torps.push({x:s.x+Math.cos(aim)*30, y:s.y+Math.sin(aim)*30, hdg:aim, run:0,
+                fault, premAt:500+Math.random()*1600});
+  s.detSpike=(s.detSpike||0)+18; G.fired++;
+}
+function firingAim(){
+  const s=G.sub, t=s.tdc;
+  if(t.on && t.valid) return s.hdg + t.gyro;   // TDC computes a gyro angle (lead)
+  return s.hdg;                                 // otherwise straight down the bow axis
+}
+function fireOne(){
   audio(); const s=G.sub;
-  if(!s.tubeReady){ say("Tube en rechargement.","cmd"); return; }
   if(s.depth>20){ say("Lancement impossible : remonte sous 20 m.","cmd"); return; }
-  G.torps.push({x:s.x+Math.cos(s.hdg)*30, y:s.y+Math.sin(s.hdg)*30,
-    hdg:s.hdg, run:0});
-  s.tubeReady=false; s.reload=18; s.detSpike=(s.detSpike||0)+18; G.fired++;
-  say("Torpille lancée. Tube 1 !","alarm"); ping(380,.18);
+  const tube=s.tubes.find(t=>t.loaded);
+  if(!tube){ say("Tous les tubes sont vides.","cmd"); return; }
+  launchTorp(firingAim());
+  tube.loaded=false; startReload(tube);
+  say("Torpille lancée !"+(s.tdc.on&&s.tdc.valid?" (solution TDC)":""),"alarm"); ping(380,.18);
   updateFireBtn();
-};
-function updateFireBtn(){ $("#bFire").disabled=!G.sub.tubeReady; }
+}
+function fireSalvo(){
+  audio(); const s=G.sub;
+  if(s.depth>20){ say("Lancement impossible : remonte sous 20 m.","cmd"); return; }
+  const ready=s.tubes.filter(t=>t.loaded);
+  if(!ready.length){ say("Tous les tubes sont vides.","cmd"); return; }
+  const base=firingAim(), n=ready.length;
+  ready.forEach((tube,i)=>{
+    const spread=(i-(n-1)/2)*0.018;            // small fan
+    launchTorp(base+spread); tube.loaded=false; startReload(tube);
+  });
+  say("SALVE de "+n+" torpilles !","alarm"); ping(360,.22);
+  updateFireBtn();
+}
+function startReload(tube){
+  if(G.sub.reserve>0){ G.sub.reserve--; tube.rt=24; } else { tube.rt=0; } // no reload if reserve empty
+}
+function updateTDC(dt){
+  const s=G.sub, t=s.tdc;
+  if(!t.on || !t.tgt || !t.tgt.alive){ t.valid=false; if(t.on&&t.tgt&&!t.tgt.alive){t.on=false;t.tgt=null;} return; }
+  const c=t.tgt;
+  t.brg=angTo(s.x,s.y,c.x,c.y); t.rng=dist(s.x,s.y,c.x,c.y);
+  t.crs=c.hdg; t.spd=c.spd;
+  // intercept solution: aim so torpedo (speed St) meets target moving at Vt
+  const St=TORP_SPD;
+  const Rx=c.x-s.x, Ry=c.y-s.y;
+  const Vx=Math.cos(c.hdg)*c.spd*KN, Vy=Math.sin(c.hdg)*c.spd*KN;
+  const a=Vx*Vx+Vy*Vy-St*St, b=2*(Rx*Vx+Ry*Vy), cc=Rx*Rx+Ry*Ry;
+  let tau=-1;
+  if(Math.abs(a)<1e-4){ if(Math.abs(b)>1e-4) tau=-cc/b; }
+  else { const disc=b*b-4*a*cc; if(disc>=0){ const sq=Math.sqrt(disc);
+    const t1=(-b+sq)/(2*a), t2=(-b-sq)/(2*a);
+    tau=Math.min(...[t1,t2].filter(x=>x>0)); if(!isFinite(tau)) tau=-1; } }
+  if(tau>0){
+    const aimX=Rx+Vx*tau, aimY=Ry+Vy*tau;
+    const aim=Math.atan2(aimY,aimX);
+    t.gyro=norm(aim-s.hdg);
+    t.valid = t.rng<TORP_RANGE && Math.abs(t.gyro)<=100*D2R;
+  } else { t.valid=false; }
+}
+$("#bFire").onclick=fireOne;
+$("#bSalvo").onclick=fireSalvo;
+function updateFireBtn(){
+  const rem=torpRemaining(), any=loadedTubes()>0;
+  $("#bFire").disabled=!any;
+  $("#bSalvo").disabled=loadedTubes()<2;
+}
+// TDC acquire / release (lock the target under the crosshair)
+function toggleTDC(){
+  const s=G.sub, t=s.tdc;
+  if(t.on){ t.on=false; t.tgt=null; t.valid=false; say("TDC désengagé.","cmd"); return; }
+  if(!(s.periUp && s.peri>0.7 && s.depth<=PERISCOPE_DEPTH)){ say("Périscope requis pour acquérir.","cmd"); return; }
+  // find a visible target nearest the crosshair (scope bearing)
+  const visR=currentVisRange(); let best=null,br=0.2;
+  for(const c of G.contacts){ if(!c.alive)continue;
+    const rel=Math.abs(norm(angTo(s.x,s.y,c.x,c.y)-s.scope)), dM=dist(s.x,s.y,c.x,c.y);
+    if(dM>visR) continue; if(rel<br){ br=rel; best=c; } }
+  if(!best){ say("Aucune cible dans le réticule.","cmd"); return; }
+  t.on=true; t.tgt=best; say("TDC : cible acquise.","cmd");
+}
 // keyboard
 addEventListener("keydown",e=>{
   if(G.over) return;
@@ -413,22 +626,38 @@ addEventListener("keydown",e=>{
   else if(k==="arrowright"||k==="d") rud=1;
   else if(k==="arrowdown"||k==="s"){ G.sub.tDepth=clamp(G.sub.tDepth+15,0,MAXDEPTH); }
   else if(k==="arrowup"||k==="z"){ G.sub.tDepth=clamp(G.sub.tDepth-15,0,MAXDEPTH); }
-  else if(k===" "){ e.preventDefault(); $("#bFire").click(); }
+  else if(k===" "){ e.preventDefault(); fireOne(); }
+  else if(k==="t"){ fireSalvo(); }
+  else if(k==="l"){ toggleTDC(); }
   else if(k==="p"){ $("#bPeri").click(); }
+  else if(k===","){ G.scopeRot=-1; }
+  else if(k==="."){ G.scopeRot=1; }
 });
 addEventListener("keyup",e=>{
   const k=e.key.toLowerCase();
   if(["arrowleft","arrowright","q","d"].includes(k)) rud=0;
+  if([",","."].includes(k)) G.scopeRot=0;
 });
 
 /* ---------- simulation ---------- */
 function step(dt){
   const s=G.sub;
   G.t+=dt;
+  G.env.clock += dt/600;                  // a sim-hour every ~10 min of play (dusk creeps in)
+
+  // periscope bearing — rotates with hull but can be slewed independently of course
+  s.scopeRel=norm(s.scopeRel + G.scopeRot*1.1*dt);
+  s.scope=norm(s.hdg + s.scopeRel);
 
   // rudder & heading — slow, deliberate turning
   s.rudder=clamp(s.rudder + rud*dt*0.5 - (rud===0? Math.sign(s.rudder)*Math.min(Math.abs(s.rudder),dt*0.6):0), -1,1);
   const surfaced=s.depth<4;
+  // battery : electric motors drain submerged; diesels recharge on the surface
+  if(surfaced){ s.batt=clamp(s.batt+0.6*dt,0,100); }
+  else { s.batt=clamp(s.batt-(0.05+s.vel*0.035)*dt,0,100); }
+  if(!surfaced && s.batt<=1){ if(s.spd>1){ s.spd=1; syncSpeedBtns(); }
+    sayOnce("batt","Batterie à plat — vitesse réduite. Faire surface aux diesels.","alarm"); }
+  else if(s.batt>15){ saidOnce.batt=0; }
   const speedKn=SPEEDS[s.spd]*(surfaced?1.7:1);      // diesels run faster on the surface
   s.vel += (speedKn - s.vel)*Math.min(1,dt*0.5);     // inertia
   s.hdg = norm(s.hdg + s.rudder*0.05*dt*(0.4+s.vel/6));
@@ -477,8 +706,12 @@ function step(dt){
   s.peri += ((s.periUp && s.depth<=PERISCOPE_DEPTH?1:0)-s.peri)*Math.min(1,dt*2.5);
   if(s.periUp && s.depth>PERISCOPE_DEPTH){ s.periUp=false; $("#bPeri").classList.remove("on"); $("#bPeri").textContent="Périscope ▲"; }
 
-  // reload
-  if(!s.tubeReady){ s.reload-=dt; if(s.reload<=0){ s.tubeReady=true; updateFireBtn(); say("Tube 1 rechargé.","cmd"); } }
+  // tube reloading
+  for(const tube of s.tubes){
+    if(!tube.loaded && tube.rt>0){ tube.rt-=dt; if(tube.rt<=0){ tube.loaded=true; updateFireBtn(); say("Tube rechargé.","cmd"); } }
+  }
+  // TDC : track the locked target, compute intercept (gyro) solution
+  updateTDC(dt);
 
   // leak: takes on water -> slow sink + hull stress; auto-stabilises slowly if shallow & slow
   if(s.leak>0){
@@ -495,32 +728,73 @@ function step(dt){
   for(const t of G.torps){
     t.run+=TORP_SPD*dt;
     t.x+=Math.cos(t.hdg)*TORP_SPD*dt; t.y+=Math.sin(t.hdg)*TORP_SPD*dt;
+    if(t.fault==="premature" && t.run>t.premAt){     // magnetic-pistol premature
+      t.dead=true; boom(); G.explosions.push({x:t.x,y:t.y,life:1.4,max:1.4});
+      say("Torpille : explosion prématurée (amorce magnétique).","alarm"); continue;
+    }
     for(const c of G.contacts){
       if(!c.alive) continue;
       if(dist(t.x,t.y,c.x,c.y)<55){
-        t.dead=true; c.alive=false; boom(); G.hits++; flashScreen();
+        t.dead=true;
+        if(t.fault==="dud"){ say("Torpille au but — RATÉ ! Percuteur défectueux.","alarm"); ping(150,.12); break; }
+        c.alive=false; boom(); G.hits++; flashScreen();
         G.explosions.push({x:c.x,y:c.y,life:2.6,max:2.6});
         G.wrecks.push({x:c.x,y:c.y,life:7});
-        if(c.type==="cargo"){ onMerchantSunk(); }
-        else { say("Escorte coulée !","alarm"); }
+        if(c.type==="cargo"){ onMerchantSunk(c); }
+        else { G.patrolTons+=c.tons||1300; say("Escorte coulée !","alarm"); }
+        break;
       }
     }
     if(t.run>TORP_RANGE || t.x<0||t.y<0||t.x>WORLD||t.y>WORLD) t.dead=true;
   }
   G.torps=G.torps.filter(t=>!t.dead);
 
+  // convoy zigzag plan (throws off the firing solution)
+  G.zigT-=dt; if(G.zigT<=0){ G.zigDir*=-1; G.zig=G.zigDir*0.34; G.zigT=16+Math.random()*16; }
+  const convoyHdg=norm(G.convoyBase+G.zig);
+
   // ---- contacts AI ----
   for(const c of G.contacts){
     if(!c.alive) continue;
     if(c.type==="cargo"){
+      c.hdg=norm(c.hdg+clamp(norm(convoyHdg-c.hdg),-0.4*dt,0.4*dt));   // steer onto the zigzag leg
       const cnx=c.x+Math.cos(c.hdg)*c.spd*KN*dt, cny=c.y+Math.sin(c.hdg)*c.spd*KN*dt;
-      if(!landAt(cnx,cny)){ c.x=cnx; c.y=cny; } else { c.hdg=norm(c.hdg+0.3); }
-      if(c.y>WORLD-60){ c.fled=true; c.alive=false; G.escaped++; }
+      if(!landAt(cnx,cny)){ c.x=cnx; c.y=cny; } else { c.hdg=norm(c.hdg+0.5); }
+      if(c.x<60||c.x>WORLD-60||c.y<60||c.y>WORLD-60){ c.fled=true; c.alive=false; G.escaped++; }
     } else {
       escortAI(c,dt);
     }
   }
   updatePlanes(dt);
+  updateHydrophone(dt);
+
+  // mines : moored mid-water — contact while shallow enough
+  if(s.depth<70){
+    for(const mn of G.mines){
+      if(!mn.live) continue;
+      if(dist(s.x,s.y,mn.x,mn.y)<45){
+        mn.live=false; boom(); flashScreen();
+        G.explosions.push({x:s.x,y:s.y,life:1.8,max:1.8}); G.booms.push({x:s.x,y:s.y,life:.5});
+        s.hull-=46; s.leak=clamp(s.leak+1.4,0,3);
+        say("MINE ! Explosion contre la coque — voie d'eau !","alarm");
+      }
+    }
+  }
+
+  // radio intelligence drops
+  G.radioT-=dt; if(G.radioT<=0){ radioReport(); G.radioT=85+Math.random()*75; }
+
+  // visual confirmation: mark contacts "seen" when in visual range & in view
+  const visR=currentVisRange(), surf=s.depth<4, scopeOK=s.peri>0.8 && s.depth<=PERISCOPE_DEPTH;
+  if(surf||scopeOK){
+    for(const c of G.contacts){
+      if(!c.alive) continue;
+      const dM=dist(s.x,s.y,c.x,c.y);
+      if(dM>visR) continue;
+      let inView = surf ? true : Math.abs(norm(angTo(s.x,s.y,c.x,c.y)-s.scope))<0.62;
+      if(inView) c.seen=G.t;
+    }
+  }
 
   // ---- objective / fail / escape resolution ----
   if(G.phase==="attack" && !G.over){
@@ -546,7 +820,7 @@ function step(dt){
     const near=clamp(1-dM/2600,0,1);
     if(near<=0) continue;
     let noise=0.35 + s.vel*0.55 + s.peri*1.1;
-    if(s.depth<4) noise+=2.6;                          // surfaced = spotted by lookouts
+    if(s.depth<4) noise+=2.6*(0.3+0.7*todInfo(G.env.clock).light);  // surfaced: easy to spot by day, less at night
     if(s.silent) noise*=0.45;
     noise += (s.detSpike>0?2.2:0);
     noise += s.leak*0.5 + s.fire*0.4;
@@ -570,6 +844,7 @@ function step(dt){
   G.booms=G.booms.filter(b=>{ b.life-=dt; return b.life>0; });
   G.explosions=G.explosions.filter(e=>{ e.life-=dt; return e.life>0; });
   G.wrecks=G.wrecks.filter(w=>{ w.life-=dt; return w.life>0; });
+  G.pings=G.pings.filter(p=>{ p.life-=dt; return p.life>0; });
 
   // hull / lose
   s.hull=clamp(s.hull,0,100);
@@ -591,6 +866,16 @@ function escortAI(c,dt){
       c.lky=clamp(s.y+(Math.random()-.5)*fuzz,40,WORLD-40); c.fixT=3.5; }
     tx=c.lkx; ty=c.lky; spd=11; turn=0.10;
     const dM=dist(c.x,c.y,s.x,s.y);
+    // active Asdic: periodic ping; refines fix & spikes detection when in range & above the layer
+    c.asdicT=(c.asdicT||0)-dt;
+    if(dM<2400 && c.asdicT<=0){
+      c.asdicT=4.0; ping(900,.10);
+      G.pings.push({x:c.x,y:c.y,life:1.1,max:1.1});
+      const layer = s.depth>130 ? 0.3 : (s.depth<14?0.6:1);   // deep dive (below layer) or surface duct defeats it
+      const ret = clamp(1-dM/2400,0,1)*layer;
+      if(ret>0.25){ c.lkx=s.x+(Math.random()-.5)*120; c.lky=s.y+(Math.random()-.5)*120; c.fixT=4;
+        G.det=clamp(G.det+ret*22,0,100); }
+    }
     c.dcT-=dt;
     if(dM<340 && c.dcT<=0){ c.dcT=3.0; dropCharges(c); }
   } else {
@@ -636,9 +921,9 @@ function dropCharges(c){
 const saidOnce={};
 function sayOnce(key,txt,cls){ if(saidOnce[key])return; saidOnce[key]=1; say(txt,cls); }
 
-function onMerchantSunk(){
+function onMerchantSunk(c){
   if(G.over) return;
-  G.merchSunk++;
+  G.merchSunk++; G.patrolTons += (c&&c.tons)||7000;
   say(`TOUCHÉ ! Liberty ship coulé (${G.merchSunk}/${G.need}).`,"alarm");
   if(G.merchSunk>=G.need){
     const esc=G.contacts.some(c=>c.type==="escort"&&c.alive);
@@ -683,37 +968,59 @@ function drawCockpit(){
   cx.translate(w*0.5,h*0.52);
   cx.rotate(s.pitch*0.22);
 
-  // --- hull silhouette (side view) ---
-  const L=58*u, H=15*u;
+  // --- Type VII U-boat silhouette (side view, bow to the right) ---
+  const L=70*u, H=11*u;
+  cx.lineJoin="round";
   cx.fillStyle="#2a322c"; cx.strokeStyle="#0a0d0b"; cx.lineWidth=2*DPR;
-  rounded(cx,-L/2,-H/2,L,H,H/2); cx.fill(); cx.stroke();
-  // deck line
-  cx.strokeStyle="#3c463d"; cx.beginPath(); cx.moveTo(-L/2+H/2,-H/2+3*DPR); cx.lineTo(L/2-H/2,-H/2+3*DPR); cx.stroke();
-  // conning tower
+  // pressure hull + casing: long low body, raised pointed bow, tapered stern
+  cx.beginPath();
+  cx.moveTo(-L*0.50,  H*0.20);                       // stern tip
+  cx.lineTo(-L*0.46, -H*0.30);
+  cx.lineTo(-L*0.10, -H*0.55);                        // casing toward tower
+  cx.lineTo( L*0.18, -H*0.55);
+  cx.lineTo( L*0.42, -H*0.32);                        // bow rise
+  cx.lineTo( L*0.52, -H*0.05);                        // net-cutter bow point
+  cx.lineTo( L*0.40,  H*0.30);
+  cx.lineTo(-L*0.40,  H*0.55);                        // keel
+  cx.closePath(); cx.fill(); cx.stroke();
+  // saddle-tank bulge along the waterline
   cx.fillStyle="#222a24";
-  rounded(cx,-6*u,-H/2-9*u,12*u,9*u,2*DPR); cx.fill(); cx.stroke();
-  // periscope mast
-  const pml=s.peri*11*u;
-  if(pml>0.5){ cx.strokeStyle="#c9a24b"; cx.lineWidth=2.4*DPR;
-    cx.beginPath(); cx.moveTo(0,-H/2-9*u); cx.lineTo(0,-H/2-9*u-pml); cx.stroke();
-    cx.fillStyle="#c9a24b"; cx.fillRect(-2.2*DPR,-H/2-9*u-pml-3*DPR,8*DPR,3*DPR); }
+  cx.beginPath(); cx.moveTo(-L*0.40,H*0.18); cx.quadraticCurveTo(0,H*0.62,L*0.36,H*0.18);
+  cx.lineTo(L*0.34,H*0.40); cx.quadraticCurveTo(0,H*0.78,-L*0.38,H*0.40); cx.closePath(); cx.fill();
+  // deck line
+  cx.strokeStyle="#3c463d"; cx.lineWidth=1.4*DPR;
+  cx.beginPath(); cx.moveTo(-L*0.44,-H*0.30); cx.lineTo(L*0.30,-H*0.45); cx.stroke();
+  // deck gun (forward)
+  cx.strokeStyle="#1a201c"; cx.lineWidth=2*DPR;
+  cx.beginPath(); cx.moveTo(L*0.20,-H*0.55); cx.lineTo(L*0.30,-H*0.95); cx.stroke();
+  // conning tower: stepped bridge + Wintergarten (flak platform aft)
+  cx.fillStyle="#222a24"; cx.strokeStyle="#0a0d0b"; cx.lineWidth=2*DPR;
+  cx.beginPath();
+  cx.moveTo(-9*u,-H*0.55); cx.lineTo(-9.5*u,-H*0.55-9*u); cx.lineTo(-1*u,-H*0.55-11*u);
+  cx.lineTo( 7*u,-H*0.55-11*u); cx.lineTo( 8*u,-H*0.55-7*u); cx.lineTo( 9*u,-H*0.55);
+  cx.closePath(); cx.fill(); cx.stroke();
+  // Wintergarten rail (aft of tower)
+  cx.strokeStyle="#3c463d"; cx.lineWidth=1.2*DPR;
+  cx.beginPath(); cx.moveTo(-9.5*u,-H*0.55-9*u); cx.lineTo(-13*u,-H*0.55-6*u); cx.lineTo(-13*u,-H*0.55); cx.stroke();
+  // periscope shears + mast
+  const pml=s.peri*13*u, mx=2*u;
+  cx.strokeStyle="#c9a24b"; cx.lineWidth=2.4*DPR;
+  if(pml>0.5){ cx.beginPath(); cx.moveTo(mx,-H*0.55-11*u); cx.lineTo(mx,-H*0.55-11*u-pml); cx.stroke();
+    cx.fillStyle="#c9a24b"; cx.fillRect(mx-2.2*DPR,-H*0.55-11*u-pml-3*DPR,9*DPR,3*DPR); }
 
-  // --- ballast tanks (fill animates with state) ---
-  const tanks=[[-L*0.30],[ -L*0.0],[L*0.30]];
+  // --- ballast saddle tanks fill/blow (the bulge fills with water) ---
   const fill=clamp(s.ballast/100,0,1);
-  for(const [tx] of tanks){
-    const tw=12*u,th=6*u, ty=H/2-th-1*DPR;
-    cx.strokeStyle="#0a0d0b"; cx.lineWidth=1.5*DPR;
-    cx.strokeRect(tx-tw/2,ty,tw,th);
+  for(const tx of [-L*0.26,-L*0.02,L*0.22]){
+    const tw=13*u,th=5*u, ty=H*0.16;
+    cx.strokeStyle="#0a0d0b"; cx.lineWidth=1.4*DPR; cx.strokeRect(tx-tw/2,ty,tw,th);
     cx.fillStyle="rgba(60,150,180,.55)";
     cx.fillRect(tx-tw/2+1, ty+th*(1-fill)+1, tw-2, th*fill-2);
-    // little bubbles when filling/emptying
   }
 
   // --- incident lights on tower ---
-  drawLamp(cx,-3.5*u,-H/2-6.5*u,"FEU",s.fire>0);
-  drawLamp(cx,0,-H/2-6.5*u,"EAU",s.leak>0);
-  drawLamp(cx,3.5*u,-H/2-6.5*u,"AVARIE",s.hull<45);
+  drawLamp(cx,-4*u,-H*0.55-5*u,"FEU",s.fire>0);
+  drawLamp(cx,0,-H*0.55-5*u,"EAU",s.leak>0);
+  drawLamp(cx,4*u,-H*0.55-5*u,"AVARIE",s.hull<45);
 
   // torpedo wake from bow when recently fired
   cx.restore();
@@ -786,18 +1093,42 @@ function drawMap(){
     const gy=oy+m*i/6; cx.beginPath();cx.moveTo(ox,gy);cx.lineTo(ox+m,gy);cx.stroke(); }
   cx.strokeStyle="rgba(95,240,138,.22)"; cx.strokeRect(ox,oy,m,m);
 
-  // terrain: shoals + landmasses
+  // terrain: shoals + landmasses + reefs
   for(const b of G.terrain.blobs){
+    if(b.reef){
+      cx.fillStyle="rgba(120,150,90,.14)";
+      cx.beginPath(); cx.ellipse(X(b.x),Y(b.y),b.rx*b.shoal*sc,b.ry*b.shoal*sc,0,0,TAU); cx.fill();
+      cx.strokeStyle="rgba(150,180,110,.5)"; cx.lineWidth=1*DPR; cx.setLineDash([3*DPR,3*DPR]);
+      cx.beginPath(); cx.ellipse(X(b.x),Y(b.y),b.rx*sc,b.ry*sc,0,0,TAU); cx.stroke(); cx.setLineDash([]);
+      continue;
+    }
     cx.fillStyle="rgba(40,95,80,.20)";
     cx.beginPath(); cx.ellipse(X(b.x),Y(b.y),b.rx*b.shoal*sc,b.ry*b.shoal*sc,0,0,TAU); cx.fill();
     cx.fillStyle="#2c3a24"; cx.strokeStyle="#465a35"; cx.lineWidth=1.5*DPR;
     cx.beginPath(); cx.ellipse(X(b.x),Y(b.y),b.rx*sc,b.ry*sc,0,0,TAU); cx.fill(); cx.stroke();
   }
+  // minefield danger zone
+  if(G.mineZone){
+    const z=G.mineZone;
+    cx.fillStyle="rgba(224,83,58,.10)";
+    cx.beginPath(); cx.arc(X(z.x),Y(z.y),z.r*sc,0,TAU); cx.fill();
+    cx.strokeStyle="rgba(224,83,58,.45)"; cx.lineWidth=1.2*DPR; cx.setLineDash([6*DPR,5*DPR]);
+    cx.beginPath(); cx.arc(X(z.x),Y(z.y),z.r*sc,0,TAU); cx.stroke(); cx.setLineDash([]);
+    cx.fillStyle="rgba(224,83,58,.7)"; cx.font=`${9*DPR}px monospace`; cx.textAlign="center";
+    cx.fillText("⚓ MINES", X(z.x), Y(z.y));
+  }
 
-  // range rings around sub
-  cx.strokeStyle="rgba(95,240,138,.13)";
-  for(const rr of [1000,2000,3000]){
-    cx.beginPath(); cx.arc(X(s.x),Y(s.y),rr*sc,0,TAU); cx.stroke();
+  // visual range (what the periscope/lookout can see) + hydrophone reach
+  const visR=currentVisRange();
+  cx.strokeStyle="rgba(95,240,138,.16)"; cx.lineWidth=1;
+  cx.beginPath(); cx.arc(X(s.x),Y(s.y),visR*sc,0,TAU); cx.stroke();
+  cx.setLineDash([3*DPR,5*DPR]); cx.strokeStyle="rgba(95,180,240,.14)";
+  cx.beginPath(); cx.arc(X(s.x),Y(s.y),HYDRO_BASE*sc,0,TAU); cx.stroke(); cx.setLineDash([]);
+  // periscope view cone (when raised)
+  if(s.peri>0.6 && s.depth<=PERISCOPE_DEPTH){
+    cx.fillStyle="rgba(232,200,120,.06)";
+    cx.beginPath(); cx.moveTo(X(s.x),Y(s.y));
+    cx.arc(X(s.x),Y(s.y),visR*sc,s.scope-0.62,s.scope+0.62); cx.closePath(); cx.fill();
   }
 
   // depth-charge booms
@@ -830,29 +1161,61 @@ function drawMap(){
     cx.fillStyle="#e8b94a"; cx.beginPath(); cx.arc(X(t.x),Y(t.y),2.5*DPR,0,TAU); cx.fill();
   }
 
-  // contacts (visibility scales with detection / distance — sonar blips)
+  // --- radio intelligence datums (uncertain, may be stale or false) ---
+  for(const it of G.intel){
+    const age=G.t-it.time, a=clamp(1-age/240,0.12,1);
+    cx.strokeStyle=`rgba(232,185,74,${a*0.6})`; cx.lineWidth=1.2*DPR; cx.setLineDash([5*DPR,4*DPR]);
+    cx.beginPath(); cx.arc(X(it.x),Y(it.y),it.r*sc,0,TAU); cx.stroke(); cx.setLineDash([]);
+    // reported course arrow
+    cx.strokeStyle=`rgba(232,185,74,${a*0.7})`;
+    cx.beginPath(); cx.moveTo(X(it.x),Y(it.y));
+    cx.lineTo(X(it.x)+Math.cos(it.course)*22*DPR, Y(it.y)+Math.sin(it.course)*22*DPR); cx.stroke();
+    cx.fillStyle=`rgba(232,185,74,${a*0.8})`; cx.font=`${8.5*DPR}px monospace`; cx.textAlign="center";
+    cx.fillText("contact signalé", X(it.x), Y(it.y)-it.r*sc-4*DPR);
+  }
+
+  // --- hydrophone bearings (direction only, no range) ---
+  for(const snd of G.sound){
+    const len=(snd.strong?visR*1.4:visR*1.0)*sc;
+    cx.strokeStyle = snd.strong ? "rgba(95,240,138,.5)" : "rgba(95,240,138,.22)";
+    cx.lineWidth=(snd.strong?2:1)*DPR; if(!snd.strong) cx.setLineDash([4*DPR,5*DPR]);
+    cx.beginPath(); cx.moveTo(X(s.x),Y(s.y));
+    cx.lineTo(X(s.x)+Math.cos(snd.b)*len, Y(s.y)+Math.sin(snd.b)*len); cx.stroke(); cx.setLineDash([]);
+  }
+  if(G.sound.length){ cx.fillStyle="rgba(95,240,138,.7)"; cx.font=`${9*DPR}px monospace`;
+    cx.textAlign="left"; cx.fillText("hydrophone : bruits d'hélices", X(s.x)+10*DPR, Y(s.y)-10*DPR); }
+
+  // active Asdic pings (expanding cyan rings)
+  for(const p of G.pings){
+    const a=p.life/p.max;
+    cx.strokeStyle=`rgba(120,210,255,${a*0.7})`; cx.lineWidth=2*DPR;
+    cx.beginPath(); cx.arc(X(p.x),Y(p.y),(1-a)*2400*sc+6*DPR,0,TAU); cx.stroke();
+  }
+  // --- contacts actually SEEN (visual), fading from memory ---
   for(const c of G.contacts){
-    if(!c.alive) continue;
-    const dM=dist(s.x,s.y,c.x,c.y);
-    const clarity=clamp(1-dM/3400,0.12,1);
-    const px=X(c.x),py=Y(c.y);
-    if(c.type==="escort"){
-      cx.fillStyle=`rgba(224,83,58,${0.35+0.6*clarity})`;
-      cx.strokeStyle=`rgba(224,83,58,${0.4+0.5*clarity})`;
-    } else {
-      cx.fillStyle=`rgba(232,185,74,${0.35+0.6*clarity})`;
-      cx.strokeStyle=`rgba(232,185,74,${0.4+0.5*clarity})`;
-    }
-    cx.lineWidth=1.5*DPR;
-    // blip
+    if(!c.alive || c.seen===undefined) continue;
+    const age=G.t-c.seen; if(age>25) continue;
+    const a=clamp(1-age/25,0,1), px=X(c.x),py=Y(c.y), esc=c.type==="escort";
+    cx.fillStyle= esc?`rgba(224,83,58,${0.4+0.6*a})`:`rgba(232,185,74,${0.4+0.6*a})`;
+    cx.strokeStyle=cx.fillStyle; cx.lineWidth=1.5*DPR;
     cx.beginPath(); cx.arc(px,py,4*DPR,0,TAU); cx.fill();
-    // heading tick
     cx.beginPath(); cx.moveTo(px,py);
     cx.lineTo(px+Math.cos(c.hdg)*11*DPR,py+Math.sin(c.hdg)*11*DPR); cx.stroke();
-    // label when clear enough
-    if(clarity>0.5){ cx.fillStyle=c.type==="escort"?"#e0533a":"#e8b94a";
-      cx.font=`${9*DPR}px monospace`; cx.textAlign="center";
-      cx.fillText(c.type==="escort"?"ESCORTE":"LIBERTY",px,py-9*DPR); }
+    cx.fillStyle= esc?`rgba(224,83,58,${a})`:`rgba(232,185,74,${a})`;
+    cx.font=`${9*DPR}px monospace`; cx.textAlign="center";
+    cx.fillText(esc?"ESCORTE":"LIBERTY",px,py-9*DPR);
+  }
+
+  // TDC locked target bracket
+  if(s.tdc.on && s.tdc.tgt && s.tdc.tgt.alive){
+    const c=s.tdc.tgt, px=X(c.x),py=Y(c.y), r=9*DPR;
+    cx.strokeStyle="rgba(95,240,138,.9)"; cx.lineWidth=1.6*DPR;
+    cx.beginPath();
+    cx.moveTo(px-r,py-r+3*DPR);cx.lineTo(px-r,py-r);cx.lineTo(px-r+3*DPR,py-r);
+    cx.moveTo(px+r,py-r+3*DPR);cx.lineTo(px+r,py-r);cx.lineTo(px+r-3*DPR,py-r);
+    cx.moveTo(px-r,py+r-3*DPR);cx.lineTo(px-r,py+r);cx.lineTo(px-r+3*DPR,py+r);
+    cx.moveTo(px+r,py+r-3*DPR);cx.lineTo(px+r,py+r);cx.lineTo(px+r-3*DPR,py+r);
+    cx.stroke();
   }
 
   // aircraft
@@ -875,11 +1238,17 @@ function drawMap(){
   cx.moveTo(11*DPR,0); cx.lineTo(-7*DPR,-5*DPR); cx.lineTo(-4*DPR,0); cx.lineTo(-7*DPR,5*DPR);
   cx.closePath(); cx.fill(); cx.stroke();
   cx.restore();
-  // sub heading line
+  // sub heading line + periscope bearing
   cx.strokeStyle="rgba(95,240,138,.3)"; cx.setLineDash([4*DPR,4*DPR]);
   cx.beginPath(); cx.moveTo(sx,sy);
   cx.lineTo(sx+Math.cos(s.hdg)*60*DPR,sy+Math.sin(s.hdg)*60*DPR); cx.stroke();
   cx.setLineDash([]);
+
+  // weather + time-of-day readout
+  const tod=todInfo(G.env.clock), hh=Math.floor(((G.env.clock%24)+24)%24);
+  cx.fillStyle="rgba(216,224,212,.7)"; cx.font=`${10*DPR}px monospace`; cx.textAlign="right";
+  cx.fillText(G.env.weather.name+" · "+tod.label+" "+String(hh).padStart(2,"0")+"h00",
+    ox+m-6*DPR, oy+13*DPR);
 
   // compass + objective
   cx.fillStyle="rgba(95,240,138,.5)"; cx.font=`${10*DPR}px monospace`;
@@ -896,44 +1265,114 @@ function drawPeri(){
   const up = s.peri>0.9 && s.depth<=PERISCOPE_DEPTH;
   const horizon=h*0.46;
   if(up){
+    const env=G.env, tod=todInfo(env.clock), light=tod.light, visR=currentVisRange();
+    const fog=env.weather.fog, sea=env.weather.sea;
+    // sky tinted by time of day
+    const sky1=mix("#1a2735","#7d8e94",light), sky2=mix("#26323a","#aeb7b4",light);
     let g=cx.createLinearGradient(0,0,0,horizon);
-    g.addColorStop(0,"#566872"); g.addColorStop(1,"#9aa7a6");
+    g.addColorStop(0,sky1); g.addColorStop(1,sky2);
     cx.fillStyle=g; cx.fillRect(0,0,w,horizon);
+    // sea
+    const sea1=mix("#0b1518","#243b3f",light), sea2=mix("#05090b","#0d1c1f",light);
     g=cx.createLinearGradient(0,horizon,0,h);
-    g.addColorStop(0,"#243b3f"); g.addColorStop(1,"#0d1c1f");
+    g.addColorStop(0,sea1); g.addColorStop(1,sea2);
     cx.fillStyle=g; cx.fillRect(0,horizon,w,h-horizon);
-    const FOV=40*D2R, half=w*0.5;
+    // a few stars at night
+    if(light<0.3){ cx.fillStyle="rgba(220,230,240,.5)";
+      for(let i=0;i<26;i++){ const sx2=(i*137.5)%w, sy2=(i*53.7)%horizon;
+        cx.fillRect(sx2,sy2,1.2*DPR,1.2*DPR); } }
+
+    const FOV=42*D2R, half=w*0.5;
     let centered=null, cRel=99;
+    // ships — only if within visual range and within the scope's field of view
+    const drawn=[];
     for(const c of G.contacts){
       if(!c.alive) continue;
-      const rel=norm(angTo(s.x,s.y,c.x,c.y)-s.hdg);
+      const rel=norm(angTo(s.x,s.y,c.x,c.y)-s.scope);
       if(Math.abs(rel)>FOV) continue;
       const dM=dist(s.x,s.y,c.x,c.y);
-      const px=half+(rel/FOV)*half;
-      const scale=clamp(1600/dM,0.22,3.2);
-      drawShipSil(cx,px,horizon,scale*DPR,c.type,c.hdg-s.hdg);
+      if(dM>visR) continue;                          // beyond visibility: invisible
+      drawn.push({c,dM,rel});
       if(Math.abs(rel)<Math.abs(cRel)){ cRel=rel; centered={c,dM}; }
     }
-    // explosions (surface)
+    drawn.sort((a,b)=>b.dM-a.dM);
+    for(const o of drawn){
+      const px=half+(o.rel/FOV)*half;
+      const scale=clamp(1600/o.dM,0.22,3.2);
+      const fade=clamp(1-(o.dM/visR)*(0.6+fog*0.5),0.05,1); // fade near the limit / in fog
+      const swell = sea*scale*4*DPR*Math.sin(G.t*1.5+o.dM*0.01);
+      cx.globalAlpha=fade;
+      drawShipSil(cx,px,horizon+swell,scale*DPR,o.c.type,o.c.hdg-s.scope);
+      cx.globalAlpha=1;
+    }
+    // explosions in view
     for(const e of G.explosions){
-      const rel=norm(angTo(s.x,s.y,e.x,e.y)-s.hdg);
+      const rel=norm(angTo(s.x,s.y,e.x,e.y)-s.scope);
       if(Math.abs(rel)>FOV) continue;
       const dM=dist(s.x,s.y,e.x,e.y);
       drawBlast(cx, half+(rel/FOV)*half, horizon, clamp(1600/dM,0.3,3)*DPR, 1-e.life/e.max);
     }
+    // atmospheric haze / fog wash
+    if(fog>0.05){ cx.fillStyle=`rgba(200,206,205,${fog*0.45*light+0.05})`; cx.fillRect(0,0,w,h); }
+    // rain streaks
+    if(env.weather.id==="rain"||env.weather.id==="storm"){
+      cx.strokeStyle="rgba(180,200,210,.18)"; cx.lineWidth=1;
+      for(let i=0;i<60;i++){ const rx=(i*welt(i)+G.t*300)%w, ry=(i*97+G.t*600)%h;
+        cx.beginPath(); cx.moveTo(rx,ry); cx.lineTo(rx-4*DPR,ry+12*DPR); cx.stroke(); }
+    }
+
     drawReticle(cx,w,h,horizon,false);
+
+    // bow axis marker — torpedoes run THIS way; bring it onto the target
+    const relBow=norm(s.hdg - s.scope);
+    if(Math.abs(relBow)<FOV){
+      const bx=half + (relBow/FOV)*half;
+      cx.strokeStyle="rgba(224,83,58,.85)"; cx.lineWidth=2*DPR; cx.setLineDash([6*DPR,4*DPR]);
+      cx.beginPath(); cx.moveTo(bx,horizon-h*0.34); cx.lineTo(bx,h); cx.stroke(); cx.setLineDash([]);
+      cx.fillStyle="rgba(224,83,58,.9)"; cx.font=`${9*DPR}px monospace`; cx.textAlign="center";
+      cx.fillText("PROUE", bx, horizon-h*0.34-4*DPR);
+    } else {
+      const left=relBow<0;
+      cx.fillStyle="rgba(224,83,58,.9)"; cx.font=`${12*DPR}px monospace`;
+      cx.textAlign=left?"left":"right";
+      cx.fillText(left?"◄ proue":"proue ►", left?10*DPR:w-10*DPR, horizon+34*DPR);
+    }
+
+    // readouts
     cx.fillStyle="#5ff08a"; cx.font=`${11*DPR}px monospace`; cx.textAlign="left";
-    const brg=Math.round((s.hdg*R2D+90+360)%360);
+    const brg=Math.round((s.scope*R2D+90+360)%360);
     cx.fillText("RELÈVEMENT "+String(brg).padStart(3,"0")+"°", 12*DPR, 22*DPR);
     cx.textAlign="right";
-    cx.fillText("PÉRISCOPE  "+Math.round(s.depth)+" m", w-12*DPR, 22*DPR);
-    if(centered && Math.abs(cRel)<6*D2R){
+    cx.fillText(env.weather.name+" · "+tod.label, w-12*DPR, 22*DPR);
+    cx.textAlign="left"; cx.fillStyle="rgba(95,240,138,.7)";
+    cx.fillText("Visi. "+(visR>=WORLD?"max":Math.round(visR)+" m"), 12*DPR, 40*DPR);
+
+    // info on the target under the crosshair
+    if(centered && Math.abs(cRel)<8*D2R){
       cx.textAlign="center"; cx.fillStyle="#e8b94a";
       cx.fillText((centered.c.type==="escort"?"ESCORTE":"LIBERTY")+" — "+Math.round(centered.dM)+" m",
         w*0.5, horizon-78*DPR);
-      const inRange=centered.dM<TORP_RANGE;
-      cx.fillStyle=inRange?"#e0533a":"#7d8a7c";
-      cx.fillText(inRange?"◉ SOLUTION DE TIR":"hors de portée", w*0.5, h*0.9);
+    }
+    // firing solution — TDC (gyro lead) takes priority, else bow-axis alignment
+    cx.textAlign="center";
+    const tdc=s.tdc;
+    if(tdc.on){
+      cx.fillStyle="#5ff08a"; cx.font=`${10*DPR}px monospace`;
+      cx.fillText("TDC VERROUILLÉ · cap cible "+String(Math.round((tdc.crs*R2D+90+360)%360)).padStart(3,"0")
+        +"° · "+tdc.spd.toFixed(0)+" nd · "+Math.round(tdc.rng)+" m", w*0.5, horizon-60*DPR);
+      cx.font=`${11*DPR}px monospace`;
+      if(tdc.valid){ cx.fillStyle="#e0533a";
+        cx.fillText("◉ SOLUTION TDC PRÊTE — gyro "+(tdc.gyro>=0?"+":"")+Math.round(tdc.gyro*R2D)+"° — FEU !", w*0.5, h*0.9); }
+      else { cx.fillStyle="#7d8a7c"; cx.fillText("TDC : pas de solution (hors portée / angle)", w*0.5, h*0.9); }
+    } else {
+      let bowT=null, bowRel=99;
+      for(const o of drawn){ const rs=norm(angTo(s.x,s.y,o.c.x,o.c.y)-s.hdg);
+        if(Math.abs(rs)<Math.abs(bowRel)){ bowRel=rs; bowT={...o, rs}; } }
+      if(bowT && bowT.dM<TORP_RANGE){
+        if(Math.abs(bowT.rs)<4*D2R){ cx.fillStyle="#e0533a"; cx.fillText("◉ SOLUTION DE TIR — FEU !", w*0.5, h*0.9); }
+        else { cx.fillStyle="#e8b94a";
+          cx.fillText("Aligner la proue — BARRE À "+(bowT.rs>0?"DROITE":"GAUCHE"), w*0.5, h*0.9); }
+      } else if(bowT){ cx.fillStyle="#7d8a7c"; cx.fillText("cible hors de portée", w*0.5, h*0.9); }
     }
   } else {
     cx.fillStyle="#05080a"; cx.fillRect(0,0,w,h);
@@ -945,6 +1384,14 @@ function drawPeri(){
   const grd=cx.createRadialGradient(w*0.5,h*0.5,Math.min(w,h)*0.30,w*0.5,h*0.5,Math.min(w,h)*0.62);
   grd.addColorStop(0,"rgba(0,0,0,0)"); grd.addColorStop(1,"rgba(0,0,0,.93)");
   cx.fillStyle=grd; cx.fillRect(0,0,w,h);
+}
+function welt(i){ return ((i*73)%50)+30; }
+function mix(c1,c2,t){
+  const a=parseInt(c1.slice(1),16), b=parseInt(c2.slice(1),16);
+  const r=Math.round((a>>16)+(((b>>16)-(a>>16))*t));
+  const g=Math.round(((a>>8)&255)+((((b>>8)&255)-((a>>8)&255))*t));
+  const bl=Math.round((a&255)+(((b&255)-(a&255))*t));
+  return `rgb(${r},${g},${bl})`;
 }
 function drawReticle(cx,w,h,horizon,dim){
   cx.strokeStyle=dim?"rgba(95,240,138,.2)":"rgba(95,240,138,.5)"; cx.lineWidth=1*DPR;
@@ -1008,14 +1455,17 @@ function updateComms(dt){
     `<div class="ln"><b>${k}</b><span class="${c||''}">${v}</span></div>`).join("")}</div>`;
   el.innerHTML=
    stn("Torpilles",[
-     ["Tube 1", s.tubeReady?"Paré au tir":"Rechargement "+Math.ceil(Math.max(0,s.reload))+" s", s.tubeReady?"ok":"amb"],
-     ["Torpilles tirées", String(G.fired)],
-     ["Cibles touchées", String(G.hits)],
+     ["Tubes parés", loadedTubes()+" / 4", loadedTubes()?"ok":"amb"],
+     ["En réserve", String(s.reserve)],
+     ["Total restant", String(torpRemaining()), torpRemaining()?"":"bad"],
+     ["TDC", s.tdc.on?(s.tdc.valid?"solution prête":"verrouillé"):"désengagé", s.tdc.on?(s.tdc.valid?"ok":"amb"):""],
+     ["Tirées / touchées", G.fired+" / "+G.hits],
    ])+
    stn("Propulsion",[
-     ["Source", submerged?"Moteurs électriques":"Diesels", submerged?"ok":"amb"],
+     ["Source", submerged?"Moteurs électriques":"Diesels (recharge)", submerged?"ok":"amb"],
      ["Régime", ["Stop","Lente","Moyenne","Rapide"][s.spd]],
      ["Vitesse", s.vel.toFixed(1)+" nd"],
+     ["Batterie", Math.round(s.batt)+" %", s.batt<20?"bad":s.batt<50?"amb":"ok"],
    ])+
    stn("Coque",[
      ["Intégrité", Math.round(s.hull)+" %", hullCls],
@@ -1027,13 +1477,19 @@ function updateComms(dt){
      ["Incendie", s.fire>0?"ACTIF":"Néant", s.fire>0?"bad":"ok"],
      ["Ballasts", Math.round(s.ballast)+" %"+(s.ballast>70?" (noyés)":s.ballast<20?" (chassés)":" (neutre)")],
    ])+
-   stn("Sonar",[
-     ["Contacts", (car+esc)+"  ·  "+car+" liberty / "+esc+" escorte"],
-     ["Plus proche", near<1e9?Math.round(near)+" m":"—"],
+   stn("Sonar / Veille",[
+     ["Hydrophone", s.depth<4?"inutilisable (surface)":(G.sound.length?G.sound.length+" bruit(s) d'hélice":"silence"),
+       s.depth<4?"amb":G.sound.length?"ok":""],
+     ["Plus proche (relèvement)", G.sound.length?String(Math.round((G.sound[0].b*R2D+90+360)%360)).padStart(3,"0")+"°":"—"],
      ["Détection ennemie", Math.round(G.det)+" %", detCls],
    ].concat(G.air?[["Veille aérienne",
        G.planes.some(p=>p.state==="attack")?"AVION EN ATTAQUE":G.planes.length?G.planes.length+" en vue":"RAS",
        G.planes.some(p=>p.state==="attack")?"bad":G.planes.length?"amb":"ok"]]:[]))+
+   stn("Conditions",[
+     ["Météo", G.env.weather.name],
+     ["Heure", todInfo(G.env.clock).label+" — "+String(Math.floor(((G.env.clock%24)+24)%24)).padStart(2,"0")+"h"],
+     ["Visibilité", (currentVisRange()>=WORLD?"maximale":Math.round(currentVisRange())+" m")],
+   ])+
    stn("Mission",[
      ["Objectif", "Couler "+G.need+" navire(s)"],
      ["Coulés", G.merchSunk+" / "+G.need, G.merchSunk>=G.need?"ok":""],
@@ -1054,6 +1510,8 @@ function hud(){
   $("#sSpeed").textContent=s.vel.toFixed(1)+" nd";
   $("#sDet").textContent=Math.round(G.det)+"%";
   $("#sHull").textContent=Math.round(s.hull)+"%";
+  $("#sBatt").textContent=Math.round(s.batt)+"%";
+  $("#gBatt").classList.toggle("warn",s.batt<20);
   $("#gDet").classList.toggle("warn",G.det>=70);
   $("#gHull").classList.toggle("warn",s.hull<45);
   $("#gDepth").classList.toggle("warn",s.depth>CRUSH);
@@ -1077,21 +1535,39 @@ function loop(ts){
 const ovl=$("#ovl"), card=$("#card");
 const COMMON_HINT=`
     <div class="hint">
-      <b>Onglets</b> — Poste, Périscope, Carte, Postes.
-      <b>Immersion</b> : Surface (visible, diesels, plus rapide) · Périsc. (12 m, mât hissable) · ▲▼ par 15 m.
-      <b>Machine</b> : plus on file vite, plus on est bruyant ; silencieux en plongée.
-      <b>Sous 210 m</b> : la coque souffre (voies d'eau, feu, implosion).
-      <b>Aviation</b> : si on est trop peu profond, les avions repèrent et bombardent — plongez vite.<br>
-      <b>Tir</b> : passer à 12 m, centrer la cible au périscope (ou via le cap), tirer.
-      <b>Clavier</b> : ←/→ barre · ↑/↓ profondeur · Espace tir · P périscope.
+      <b>Chasse</b> — le convoi est quelque part dans le secteur. Recoupez les <b>messages radio</b>
+      (cercles jaunes, parfois faux), suivez les <b>relèvements à l'hydrophone</b> (lent et silencieux),
+      puis confirmez au <b>périscope</b>.
+      <b>Périscope</b> : ◄ Scope ► fait pivoter la vue sans changer de cap ; portée réduite par la météo et la nuit.
+      <b>Tir</b> : 4 tubes avant (14 torpilles). <b>Feu</b> = 1 tube · <b>Salve</b> = tous les tubes parés.
+      Sans TDC, amenez la <b>proue</b> (repère rouge) sur la cible. Avec <b>TDC</b> (au périscope, bouton Verrou) :
+      acquérez la cible centrée, le calculateur trouve l'angle gyroscopique et vous tirez en anticipation.
+      <b>Asdic</b> : en chasse, l'escorte « pingue » — plongez sous la couche thermique (~130 m) pour brouiller son écho.
+      <b>Batterie</b> : les moteurs électriques se vident en plongée ; faites surface aux diesels (la nuit) pour recharger.
+      <b>Gare</b> : torpilles parfois défectueuses, champs de mines (zone rouge) et hauts-fonds (récifs pointillés).
+      <b>Clavier</b> : ←/→ barre · ↑/↓ profondeur · , / . scope · Espace feu · T salve · L TDC · P périscope.
     </div>`;
+function loadCareer(){ try{ return JSON.parse(localStorage.getItem("uboot_career"))||{patrols:0,tonnage:0}; }catch(e){ return {patrols:0,tonnage:0}; } }
+function saveCareer(c){ try{ localStorage.setItem("uboot_career",JSON.stringify(c)); }catch(e){} }
+function rankOf(t){
+  if(t>=120000) return "Ritterkreuzträger";
+  if(t>=60000)  return "Korvettenkapitän";
+  if(t>=25000)  return "Kapitänleutnant";
+  if(t>=8000)   return "Oberleutnant zur See";
+  return "Leutnant zur See";
+}
 function showBrief(){
   G=undefined;
+  const car=loadCareer();
   card.innerHTML=`
     <h1>U-552 · Atlantique Nord</h1>
     <div class="sub">Choisissez votre patrouille</div>
-    <p>L'amiral vous propose plusieurs missions. À chacune son convoi, ses escortes et ses dangers.</p>
+    <div class="obj">Carrière : <b>${car.patrols}</b> patrouille(s) · <b>${car.tonnage.toLocaleString("fr")} t</b> coulé(es)<br>
+      Grade : <b>${rankOf(car.tonnage)}</b></div>
     <div id="scenList"></div>
+    <div style="text-align:center;margin-top:6px">
+      <span id="resetCar" style="font-size:10px;color:var(--txt-dim);cursor:pointer;text-decoration:underline">réinitialiser la carrière</span>
+    </div>
     ${COMMON_HINT}`;
   const list=card.querySelector("#scenList");
   SCENARIOS.forEach(sc=>{
@@ -1102,17 +1578,18 @@ function showBrief(){
     b.onclick=()=>startMission(sc);
     list.appendChild(b);
   });
+  card.querySelector("#resetCar").onclick=()=>{ saveCareer({patrols:0,tonnage:0}); showBrief(); };
   ovl.classList.remove("hide");
 }
 function startMission(sc){
-  audio(); saidOnceReset(); newGame(sc);
+  audio(); saidOnceReset(); newGame(sc); updateFireBtn();
   ovl.classList.add("hide"); G.running=true; resize();
-  say(`Patrouille « ${sc.name} ». En plongée, cap au nord.`,"cmd");
+  say(`Patrouille « ${sc.name} ». 14 torpilles à bord.`,"cmd");
 }
 function showEnd(won){
-  let best=+(localStorage.getItem("uboot_best")||0);
+  const car=loadCareer();
   const hull=Math.round(G.sub.hull);
-  if(won && hull>best){ best=hull; localStorage.setItem("uboot_best",best); }
+  if(won){ car.patrols++; car.tonnage+=G.patrolTons; saveCareer(car); }
   const reasons={
     objectif:"Objectif atteint. Plus aucune escorte en vue.",
     escorte:"Objectif atteint et escorte(s) coulée(s).",
@@ -1126,10 +1603,10 @@ function showEnd(won){
     <div class="res ${won?"win":"lose"}">${won
       ? winLine+` · coque ${hull}%`
       : (G.loseReason||"Bâtiment perdu.")}</div>
-    <p>${won
-      ? `Navires coulés : ${G.merchSunk}. L'amiral vous félicite.`
-      : "Les survivants seront recueillis... peut-être."}</p>
-    <div class="obj">Meilleure coque ramenée : <b>${best}%</b></div>
+    <div class="obj">Tonnage de la patrouille : <b>${G.patrolTons.toLocaleString("fr")} t</b>
+      (${G.merchSunk} navire(s))<br>
+      ${won?`Carrière : <b>${car.tonnage.toLocaleString("fr")} t</b> · grade <b>${rankOf(car.tonnage)}</b>`
+           :"Patrouille non créditée."}</div>
     <button class="go" id="goBtn">Nouvelle patrouille</button>`;
   ovl.classList.remove("hide");
   $("#goBtn").onclick=()=>{ saidOnceReset(); showBrief(); };
