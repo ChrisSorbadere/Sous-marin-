@@ -275,78 +275,88 @@ const TORP_SPD=14;          // m/s (~27 kn)
 const TORP_RANGE=3200;      // m
 
 /* ---------- audio (sonar ping + booms) ---------- */
-let AC=null;
+let AC=null, master=null;
 let muted=(()=>{ try{return localStorage.getItem("uboot_mute")==="1";}catch(e){return false;} })();
-function audio(){ if(!AC){ try{AC=new (window.AudioContext||window.webkitAudioContext)();}catch(e){} } if(AC&&AC.state==="suspended"){ try{AC.resume();}catch(e){} } return AC; }
+function audio(){
+  if(!AC){ try{ AC=new (window.AudioContext||window.webkitAudioContext)();
+    master=AC.createGain(); master.gain.value=muted?0:1; master.connect(AC.destination);
+  }catch(e){} }
+  if(AC&&AC.state==="suspended"){ try{AC.resume();}catch(e){} }
+  return AC;
+}
+function dest(){ return master||(AC&&AC.destination); }
+addEventListener("pointerdown",()=>audio(),{once:true});
 function vibrate(p){ if(muted||!navigator.vibrate) return; try{ navigator.vibrate(p); }catch(e){} }
 function ping(freq=720,vol=.16){
-  if(muted) return;
   const ac=audio(); if(!ac)return;
   const o=ac.createOscillator(),g=ac.createGain();
   o.type="sine";o.frequency.value=freq;
   g.gain.setValueAtTime(0,ac.currentTime);
   g.gain.linearRampToValueAtTime(vol,ac.currentTime+.01);
   g.gain.exponentialRampToValueAtTime(.0005,ac.currentTime+.5);
-  o.connect(g).connect(ac.destination);o.start();o.stop(ac.currentTime+.55);
+  o.connect(g).connect(dest());o.start();o.stop(ac.currentTime+.55);
 }
+// explosion: mid-heavy so phone speakers actually reproduce it
 function boom(){
-  if(muted) return;
   const ac=audio(); if(!ac)return;
-  const dur=.9, n=ac.sampleRate*dur, buf=ac.createBuffer(1,n,ac.sampleRate), d=buf.getChannelData(0);
-  for(let i=0;i<n;i++){ d[i]=(Math.random()*2-1)*Math.pow(1-i/n,2.2); }
+  const dur=.8, n=ac.sampleRate*dur, buf=ac.createBuffer(1,n,ac.sampleRate), d=buf.getChannelData(0);
+  for(let i=0;i<n;i++){ d[i]=(Math.random()*2-1)*Math.pow(1-i/n,2.0); }
   const src=ac.createBufferSource();src.buffer=buf;
-  const f=ac.createBiquadFilter();f.type="lowpass";f.frequency.value=320;
-  const g=ac.createGain();g.gain.value=.5;
-  src.connect(f).connect(g).connect(ac.destination);src.start();
+  const f=ac.createBiquadFilter();f.type="lowpass";f.frequency.value=850;   // keep energy up to 850 Hz
+  const g=ac.createGain();g.gain.value=.6;
+  src.connect(f).connect(g).connect(dest());src.start();
+  // punchy mid transient for small speakers
+  const o=ac.createOscillator(),og=ac.createGain(),t=ac.currentTime;
+  o.type="triangle"; o.frequency.setValueAtTime(220,t); o.frequency.exponentialRampToValueAtTime(70,t+.25);
+  og.gain.setValueAtTime(.5,t); og.gain.exponentialRampToValueAtTime(.001,t+.35);
+  o.connect(og).connect(dest()); o.start(); o.stop(t+.4);
 }
-// short filtered-noise burst (creaks, hiss)
 function noiseBurst(dur,vol,cut,type){
-  if(muted) return; const ac=audio(); if(!ac)return;
+  const ac=audio(); if(!ac)return;
   const n=Math.max(1,ac.sampleRate*dur), buf=ac.createBuffer(1,n,ac.sampleRate), d=buf.getChannelData(0);
   for(let i=0;i<n;i++){ d[i]=(Math.random()*2-1)*Math.pow(1-i/n,1.4); }
   const src=ac.createBufferSource();src.buffer=buf;
-  const f=ac.createBiquadFilter();f.type=type||"lowpass";f.frequency.value=cut||400;
+  const f=ac.createBiquadFilter();f.type=type||"bandpass";f.frequency.value=cut||600;
   const g=ac.createGain();g.gain.value=vol||.3;
-  src.connect(f).connect(g).connect(ac.destination);src.start();
+  src.connect(f).connect(g).connect(dest());src.start();
 }
 function beep(freq,vol,dur,type,slideTo){
-  if(muted) return; const ac=audio(); if(!ac)return;
+  const ac=audio(); if(!ac)return;
   const o=ac.createOscillator(),g=ac.createGain(),t=ac.currentTime;
   o.type=type||"square"; o.frequency.setValueAtTime(freq,t);
   if(slideTo) o.frequency.linearRampToValueAtTime(slideTo,t+dur);
   g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(vol,t+.02);
   g.gain.exponentialRampToValueAtTime(.0005,t+dur);
-  o.connect(g).connect(ac.destination); o.start(); o.stop(t+dur+.02);
+  o.connect(g).connect(dest()); o.start(); o.stop(t+dur+.02);
 }
-function klaxon(){ beep(500,.16,.28,"square"); setTimeout(()=>beep(370,.16,.34,"square"),300); }
-function creak(){ noiseBurst(.5,.22,180,"lowpass"); beep(90,.08,.5,"sawtooth",70); }
-function launchSfx(){ noiseBurst(.5,.35,1400,"highpass"); }         // compressed-air hiss
-function heartbeat(){ beep(60,.16,.14,"sine"); setTimeout(()=>beep(55,.13,.16,"sine"),200); }
-// engine hum loop — gain/pitch follow speed & whether we're surfaced (diesel) or submerged (electric)
+function klaxon(){ beep(560,.28,.30,"square"); setTimeout(()=>beep(410,.28,.36,"square"),300); }
+function creak(){ noiseBurst(.5,.3,420,"bandpass"); beep(150,.14,.5,"sawtooth",95); }
+function launchSfx(){ noiseBurst(.55,.4,1600,"highpass"); }         // compressed-air hiss
+function heartbeat(){ beep(110,.3,.16,"sine",80); setTimeout(()=>beep(100,.26,.18,"sine",75),210); }
+// engine hum — sawtooth harmonics carry the pitch on tiny speakers
 let eng=null;
 function engineEnsure(){
-  if(eng||muted) return; const ac=audio(); if(!ac)return;
+  const ac=audio(); if(!ac||eng) return;
   const o1=ac.createOscillator(), o2=ac.createOscillator(), f=ac.createBiquadFilter(), g=ac.createGain();
-  o1.type="sawtooth"; o2.type="sine"; o2.detune.value=8;
-  f.type="lowpass"; f.frequency.value=200; g.gain.value=0;
-  o1.connect(f); o2.connect(f); f.connect(g).connect(ac.destination);
+  o1.type="sawtooth"; o2.type="square"; o2.detune.value=6;
+  f.type="lowpass"; f.frequency.value=600; g.gain.value=0;
+  o1.connect(f); o2.connect(f); f.connect(g).connect(dest());
   o1.start(); o2.start();
   eng={o1,o2,f,g};
 }
 function engineSet(vel,surf){
-  if(muted){ if(eng) eng.g.gain.value=0; return; }
-  engineEnsure(); if(!eng) return; const ac=audio();
-  const base = surf?58:96;                                  // diesel low rumble vs electric hum
-  const f = base + vel*7;
+  engineEnsure(); if(!eng) return; const ac=audio(); if(!ac) return;
+  const base = surf?92:132;                                 // diesel vs electric
+  const f = base + vel*10;
   eng.o1.frequency.setTargetAtTime(f, ac.currentTime, .2);
-  eng.o2.frequency.setTargetAtTime(f*2, ac.currentTime, .2);
-  eng.f.frequency.setTargetAtTime(surf?300:170, ac.currentTime, .3);
-  const vol = vel<0.15 ? 0.006 : (0.012 + vel*0.012) * (surf?1.25:1);
-  eng.g.gain.setTargetAtTime(clamp(vol,0,0.06), ac.currentTime, .25);
+  eng.o2.frequency.setTargetAtTime(f*1.5, ac.currentTime, .2);
+  eng.f.frequency.setTargetAtTime(surf?700:520, ac.currentTime, .3);
+  const vol = vel<0.15 ? 0 : (0.05 + vel*0.03) * (surf?1.2:1);   // silent when stopped
+  eng.g.gain.setTargetAtTime(clamp(vol,0,0.16), ac.currentTime, .25);
 }
 function setMute(m){
   muted=m; try{ localStorage.setItem("uboot_mute", m?"1":"0"); }catch(e){}
-  if(eng) eng.g.gain.value=0;
+  if(master) master.gain.value = m?0:1;
   const b=$("#bMute"); if(b) b.textContent = m?"🔇":"🔊";
 }
 
@@ -526,7 +536,7 @@ function spawnPlane(){
   else if(e===2){x=Math.random()*WORLD;y=-200;} else {x=Math.random()*WORLD;y=WORLD+200;}
   const hdg=angTo(x,y, s.x+(Math.random()-.5)*1600, s.y+(Math.random()-.5)*1600);
   G.planes.push({x,y,hdg,spd:28,state:"patrol",dropT:0,tx:0,ty:0});
-  say("Veille radar : avion ennemi dans le secteur.","cmd");
+  if(G.sub.depth<6) say("Veille : avion ennemi en vue !","alarm");
 }
 function planeAttack(p){
   const s=G.sub; boom(); flashScreen(); vibrate([0,160,50,110]);
@@ -630,7 +640,6 @@ $("#bPeri").onclick=function(){
 $("#bCrash").onclick=()=>{
   const s=G.sub; if(!s) return;
   s.tDepth=Math.max(s.depth,55); s.crashT=6;
-  if(s.periUp){ s.periUp=false; }
   klaxon(); vibrate([0,90,50,90]); say("PLONGÉE D'URGENCE !","alarm");
 };
 $("#bBlow").onclick=()=>{
@@ -874,7 +883,7 @@ function step(dt){
     if(!c.alive) continue;
     if(c.type==="cargo"){
       c.hdg=norm(c.hdg+clamp(norm(convoyHdg-c.hdg),-0.4*dt,0.4*dt));   // steer onto the zigzag leg
-      avoidMines(c,dt);
+      avoidHazards(c,dt);
       const cnx=c.x+Math.cos(c.hdg)*c.spd*KN*dt, cny=c.y+Math.sin(c.hdg)*c.spd*KN*dt;
       if(!landAt(cnx,cny)){ c.x=cnx; c.y=cny; } else { c.hdg=norm(c.hdg+0.5); }
       if(c.x<60||c.x>WORLD-60||c.y<60||c.y>WORLD-60){ c.fled=true; c.alive=false; G.escaped++; }
@@ -1033,18 +1042,17 @@ function escortAI(c,dt){
   // steer with a limited turn rate — a ship cannot pivot on the spot
   const da=norm(angTo(c.x,c.y,tx,ty)-c.hdg);
   c.hdg=norm(c.hdg+clamp(da,-turn*dt,turn*dt));
-  avoidMines(c,dt);
+  avoidHazards(c,dt);
   const enx=clamp(c.x+Math.cos(c.hdg)*spd*KN*dt,20,WORLD-20);
   const eny=clamp(c.y+Math.sin(c.hdg)*spd*KN*dt,20,WORLD-20);
   if(!landAt(enx,eny)){ c.x=enx; c.y=eny; } else { c.hdg=norm(c.hdg+1.0); c.fixT=0; }
 }
-function avoidMines(c,dt){
+function avoidHazards(c,dt){
+  // convoys skirt a known minefield; shoals/reefs are passable to surface ships
   const z=G.mineZone; if(!z) return;
   const d=dist(c.x,c.y,z.x,z.y);
-  if(d < z.r+300){                              // steer to skirt the minefield
-    const away=angTo(z.x,z.y,c.x,c.y);
-    c.hdg=norm(c.hdg + clamp(norm(away-c.hdg),-0.7*dt,0.7*dt));
-  }
+  if(d < z.r+300){ const away=angTo(z.x,z.y,c.x,c.y);
+    c.hdg=norm(c.hdg + clamp(norm(away-c.hdg),-0.7*dt,0.7*dt)); }
 }
 function dropCharges(c){
   boom();
@@ -1396,8 +1404,8 @@ function drawMap(){
     cx.stroke();
   }
 
-  // aircraft
-  for(const p of G.planes){
+  // aircraft — only known when surfaced (visual lookout); no air-search radar aboard, none tracked submerged
+  if(s.depth<6) for(const p of G.planes){
     const px=X(p.x),py=Y(p.y), atk=p.state==="attack";
     cx.save(); cx.translate(px,py); cx.rotate(p.hdg);
     cx.fillStyle= atk?"#ff7a4a":"#cfe0d2";
@@ -1690,9 +1698,9 @@ function updateComms(dt){
        s.depth<4?"amb":G.sound.length?"ok":""],
      ["Plus proche (relèvement)", G.sound.length?String(Math.round((G.sound[0].b*R2D+90+360)%360)).padStart(3,"0")+"°":"—"],
      ["Détection ennemie", Math.round(G.det)+" %", detCls],
-   ].concat(G.air?[["Veille aérienne",
-       G.planes.some(p=>p.state==="attack")?"AVION EN ATTAQUE":G.planes.length?G.planes.length+" en vue":"RAS",
-       G.planes.some(p=>p.state==="attack")?"bad":G.planes.length?"amb":"ok"]]:[]))+
+   ].concat(G.air?[["Veille aérienne (visuelle)",
+       G.planes.some(p=>p.state==="attack")?"AVION EN ATTAQUE":(s.depth<6?(G.planes.length?G.planes.length+" en vue":"RAS"):"— (en plongée)"),
+       G.planes.some(p=>p.state==="attack")?"bad":(s.depth<6&&G.planes.length?"amb":"")]]:[]))+
    stn("Conditions",[
      ["Météo", G.env.weather.name],
      ["Heure", todInfo(G.env.clock).label+" — "+String(Math.floor(((G.env.clock%24)+24)%24)).padStart(2,"0")+"h"],

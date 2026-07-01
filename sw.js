@@ -1,4 +1,4 @@
-const CACHE = "uboot-v14";
+const CACHE = "uboot-v16";
 const ASSETS = [
   "./",
   "./index.html",
