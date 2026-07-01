@@ -1,11 +1,18 @@
-const CACHE = "uboot-v16";
+const CACHE = "uboot-v18";
 const ASSETS = [
   "./",
   "./index.html",
   "./manifest.json",
   "./icon-192.png",
   "./icon-512.png",
-  "./icon-512-maskable.png"
+  "./icon-512-maskable.png",
+  "./sons/sonar.mp3",
+  "./sons/explosion.mp3",
+  "./sons/klaxon.mp3",
+  "./sons/torpille.mp3",
+  "./sons/diesel.mp3",
+  "./sons/electrique.mp3",
+  "./sons/mer.mp3"
 ];
 
 self.addEventListener("install", e => {
