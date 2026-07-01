@@ -1585,6 +1585,11 @@ function drawPeri(){
       ptext(cx, left?"◄ proue":"proue ►", left?12*DPR:w-12*DPR, horizon+34*DPR, bowCol,13,left?"left":"right");
     }
 
+    // optical vignette — on the scene, BEHIND the HUD readouts so the corners stay legible
+    { const gv=cx.createRadialGradient(w*0.5,h*0.5,Math.min(w,h)*0.30,w*0.5,h*0.5,Math.min(w,h)*0.62);
+      gv.addColorStop(0,"rgba(0,0,0,0)"); gv.addColorStop(1,"rgba(0,0,0,.93)");
+      cx.fillStyle=gv; cx.fillRect(0,0,w,h); }
+
     // ---- top info bar : two clear columns ----
     cx.fillStyle="rgba(4,8,6,.7)"; cx.fillRect(0,0,w,50*DPR);
     const brg=Math.round((s.scope*R2D+90+360)%360);
@@ -1621,13 +1626,13 @@ function drawPeri(){
     } else if(bowT){ ptext(cx,"cible hors de portée", w*0.5, h-14*DPR, "#cdd6cc",12,"center"); }
   } else {
     cx.fillStyle="#05080a"; cx.fillRect(0,0,w,h);
+    const gv=cx.createRadialGradient(w*0.5,h*0.5,Math.min(w,h)*0.30,w*0.5,h*0.5,Math.min(w,h)*0.62);
+    gv.addColorStop(0,"rgba(0,0,0,0)"); gv.addColorStop(1,"rgba(0,0,0,.93)");
+    cx.fillStyle=gv; cx.fillRect(0,0,w,h);
     drawReticle(cx,w,h,h*0.5,true);
     ptext(cx,"Périscope baissé", w*0.5, h*0.5-12*DPR, "#cdd6cc",14,"center");
     ptext(cx,"Remonter à ≤ 14 m, puis hisser le périscope", w*0.5, h*0.5+12*DPR, "#9aa7a6",12,"center");
   }
-  const grd=cx.createRadialGradient(w*0.5,h*0.5,Math.min(w,h)*0.30,w*0.5,h*0.5,Math.min(w,h)*0.62);
-  grd.addColorStop(0,"rgba(0,0,0,0)"); grd.addColorStop(1,"rgba(0,0,0,.93)");
-  cx.fillStyle=grd; cx.fillRect(0,0,w,h);
 }
 function ptext(cx,txt,x,y,col,size,align){
   cx.font=`bold ${size*DPR}px monospace`; cx.textAlign=align||"left"; cx.textBaseline="alphabetic";
@@ -1882,7 +1887,7 @@ function showBrief(){
       <span id="resetCar" style="font-size:10px;color:var(--txt-dim);cursor:pointer;text-decoration:underline">réinitialiser la carrière</span>
     </div>
     <div id="sndStat" style="text-align:center;margin-top:4px;font-size:10px;color:var(--txt-dim)"></div>
-    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v24</div>
+    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v25</div>
     ${COMMON_HINT}`;
   updateSndStat();
   const list=card.querySelector("#scenList");
