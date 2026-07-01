@@ -1,43 +1,61 @@
-const CACHE = "uboot-v19";
-const ASSETS = [
+const CACHE = "uboot-v20";
+// Precache ONLY the shell. Never include files that might 404 (e.g. sounds) —
+// a single missing file would make addAll() reject and block the whole update.
+const SHELL = [
   "./",
   "./index.html",
   "./manifest.json",
   "./icon-192.png",
   "./icon-512.png",
-  "./icon-512-maskable.png",
-  "./sons/sonar.mp3",
-  "./sons/explosion.mp3",
-  "./sons/klaxon.mp3",
-  "./sons/torpille.mp3",
-  "./sons/diesel.mp3",
-  "./sons/electrique.mp3",
-  "./sons/mer.mp3"
+  "./icon-512-maskable.png"
 ];
 
 self.addEventListener("install", e => {
-  e.waitUntil(
-    caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting())
-  );
+  e.waitUntil((async () => {
+    const c = await caches.open(CACHE);
+    // allSettled → one missing asset can't abort the install
+    await Promise.allSettled(SHELL.map(u => c.add(u)));
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener("activate", e => {
-  e.waitUntil(
-    caches.keys()
-      .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
-      .then(() => self.clients.claim())
-  );
+  e.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)));
+    await self.clients.claim();
+  })());
 });
 
 self.addEventListener("fetch", e => {
-  if (e.request.method !== "GET") return;
-  e.respondWith(
-    caches.match(e.request).then(hit =>
-      hit || fetch(e.request).then(resp => {
+  const req = e.request;
+  if (req.method !== "GET") return;
+
+  const isNav = req.mode === "navigate" || req.destination === "document";
+
+  if (isNav) {
+    // NETWORK-FIRST for pages: always get the freshest index.html when online.
+    e.respondWith(
+      fetch(req).then(resp => {
         const copy = resp.clone();
-        caches.open(CACHE).then(c => c.put(e.request, copy)).catch(() => {});
+        caches.open(CACHE).then(c => c.put("./index.html", copy)).catch(() => {});
         return resp;
-      }).catch(() => caches.match("./index.html"))
-    )
+      }).catch(() => caches.match(req).then(h => h || caches.match("./index.html")))
+    );
+    return;
+  }
+
+  // Everything else: stale-while-revalidate (fast, and self-updates in the background).
+  e.respondWith(
+    caches.match(req).then(hit => {
+      const net = fetch(req).then(resp => {
+        if (resp && resp.status === 200) {
+          const copy = resp.clone();
+          caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
+        }
+        return resp;
+      }).catch(() => hit);
+      return hit || net;
+    })
   );
 });

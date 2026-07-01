@@ -1945,7 +1945,13 @@ try{ audio(); updateSndStat(); }catch(e){}   // start decoding samples immediate
 </script>
 <script>
 if("serviceWorker" in navigator){
-  addEventListener("load",()=>navigator.serviceWorker.register("./sw.js").catch(()=>{}));
+  addEventListener("load",()=>{
+    navigator.serviceWorker.register("./sw.js").then(reg=>{ try{ reg.update(); }catch(e){} }).catch(()=>{});
+  });
+  let reloaded=false;
+  navigator.serviceWorker.addEventListener("controllerchange",()=>{
+    if(reloaded) return; reloaded=true; location.reload();   // a new worker took over → load fresh assets once
+  });
 }
 </script>
 </body>
