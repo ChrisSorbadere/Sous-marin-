@@ -278,8 +278,15 @@ const TORP_RANGE=3200;      // m
 let AC=null, master=null, reverb=null;
 let SND={}, sndReady=false, loops=null, sndOK=0, sndFail=[];
 let muted=(()=>{ try{return localStorage.getItem("uboot_mute")==="1";}catch(e){return false;} })();
-const SND_FILES={ sonar:"sons/sonar.mp3", explosion:"sons/explosion.mp3", klaxon:"sons/klaxon.mp3",
-  torpille:"sons/torpille.mp3", diesel:"sons/diesel.mp3", electrique:"sons/electrique.mp3", mer:"sons/mer.mp3" };
+const SND_FILES={
+  sonar:     ["sons/sonar.mp3","sons/Sonar.mp3","Sonar.mp3"],
+  explosion: ["sons/explosion.mp3","sons/Explosion.mp3","Explosion.mp3"],
+  klaxon:    ["sons/klaxon.mp3","sons/Klaxon.mp3","sons/Klaxon__Alarme_plongée_.mp3","Klaxon__Alarme_plongée_.mp3"],
+  torpille:  ["sons/torpille.mp3","sons/Torpille.mp3","Torpille.mp3"],
+  diesel:    ["sons/diesel.mp3","sons/Diesel.mp3","Diesel.mp3"],
+  electrique:["sons/electrique.mp3","sons/Electrique.mp3","Electrique.mp3"],
+  mer:       ["sons/mer.mp3","sons/Mer.mp3","sons/Vent_Vagues_Long.mp3","Vent_Vagues_Long.mp3"]
+};
 const SND_TOTAL=Object.keys(SND_FILES).length;
 function updateSndStat(){
   const el=document.getElementById("sndStat"); if(!el) return;
@@ -303,10 +310,13 @@ function audio(){
 function dest(){ return master||(AC&&AC.destination); }
 async function loadSounds(){
   sndOK=0; sndFail=[];
-  const jobs=Object.entries(SND_FILES).map(async ([k,url])=>{
-    try{ const r=await fetch(url); if(!r.ok) throw 0; const ab=await r.arrayBuffer();
-      SND[k]=await AC.decodeAudioData(ab); sndOK++; }
-    catch(e){ sndFail.push(k); }
+  const jobs=Object.entries(SND_FILES).map(async ([k,urls])=>{
+    for(const url of urls){
+      try{ const r=await fetch(url); if(!r.ok) continue; const ab=await r.arrayBuffer();
+        SND[k]=await AC.decodeAudioData(ab); sndOK++; return; }
+      catch(e){ /* try the next candidate name */ }
+    }
+    sndFail.push(k);
   });
   await Promise.all(jobs);
   sndReady=true; startLoops(); updateSndStat();
@@ -1859,7 +1869,7 @@ function showBrief(){
       <span id="resetCar" style="font-size:10px;color:var(--txt-dim);cursor:pointer;text-decoration:underline">réinitialiser la carrière</span>
     </div>
     <div id="sndStat" style="text-align:center;margin-top:4px;font-size:10px;color:var(--txt-dim)"></div>
-    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v20 — sons réels</div>
+    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v21 — sons réels</div>
     ${COMMON_HINT}`;
   updateSndStat();
   const list=card.querySelector("#scenList");
