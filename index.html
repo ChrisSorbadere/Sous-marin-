@@ -276,10 +276,17 @@ const TORP_RANGE=3200;      // m
 
 /* ---------- audio : real samples (sons/) + underwater reverb ---------- */
 let AC=null, master=null, reverb=null;
-let SND={}, sndReady=false, loops=null;                    // decoded buffers + engine/sea loop gains
+let SND={}, sndReady=false, loops=null, sndOK=0, sndFail=[];
 let muted=(()=>{ try{return localStorage.getItem("uboot_mute")==="1";}catch(e){return false;} })();
 const SND_FILES={ sonar:"sons/sonar.mp3", explosion:"sons/explosion.mp3", klaxon:"sons/klaxon.mp3",
   torpille:"sons/torpille.mp3", diesel:"sons/diesel.mp3", electrique:"sons/electrique.mp3", mer:"sons/mer.mp3" };
+const SND_TOTAL=Object.keys(SND_FILES).length;
+function updateSndStat(){
+  const el=document.getElementById("sndStat"); if(!el) return;
+  if(!sndReady) el.textContent="Sons : chargement…";
+  else if(sndOK===SND_TOTAL) el.textContent="🔊 Sons réels : "+sndOK+"/"+SND_TOTAL+" chargés ✓";
+  else el.textContent="⚠ Sons "+sndOK+"/"+SND_TOTAL+" — manquant(s) : "+sndFail.join(", ")+" — vérifier le dossier sons/";
+}
 function audio(){
   if(!AC){ try{ AC=new (window.AudioContext||window.webkitAudioContext)();
     master=AC.createGain(); master.gain.value=muted?0:1; master.connect(AC.destination);
@@ -295,12 +302,14 @@ function audio(){
 }
 function dest(){ return master||(AC&&AC.destination); }
 async function loadSounds(){
+  sndOK=0; sndFail=[];
   const jobs=Object.entries(SND_FILES).map(async ([k,url])=>{
-    try{ const r=await fetch(url); const ab=await r.arrayBuffer();
-      SND[k]=await AC.decodeAudioData(ab); }catch(e){ /* missing file → that sound stays silent */ }
+    try{ const r=await fetch(url); if(!r.ok) throw 0; const ab=await r.arrayBuffer();
+      SND[k]=await AC.decodeAudioData(ab); sndOK++; }
+    catch(e){ sndFail.push(k); }
   });
   await Promise.all(jobs);
-  sndReady=true; startLoops();
+  sndReady=true; startLoops(); updateSndStat();
 }
 function startLoops(){
   if(!AC||loops) return;
@@ -312,19 +321,25 @@ function startLoops(){
 }
 addEventListener("pointerdown",()=>audio(),{once:true});
 function vibrate(p){ if(muted||!navigator.vibrate) return; try{ navigator.vibrate(p); }catch(e){} }
-// one-shot sample player (optionally through the reverb)
+// one-shot sample player (optionally through the reverb) — returns true if a sample actually played
 function play(name,vol,wet,rate){
-  const ac=audio(); if(!ac||!SND[name]) return;
+  const ac=audio(); if(!ac||!SND[name]) return false;
   const s=ac.createBufferSource(), g=ac.createGain();
   s.buffer=SND[name]; if(rate) s.playbackRate.value=rate;
   g.gain.value=vol==null?1:vol;
   s.connect(g); g.connect(dest()); if(wet&&reverb) g.connect(reverb);
-  s.start();
+  s.start(); return true;
 }
-function ping(freq,vol){ play("sonar", vol!=null?Math.min(1,vol*4):.9, true); }  // ASDIC/sonar sample
-function boom(){ play("explosion", 1, true); }
-function klaxon(){ play("klaxon", .9, false); }
-function launchSfx(){ play("torpille", .9, false); }
+// fallback synths (used only if a sample is missing) — deliberately DISTINCT from the old build
+function tone(freq,vol,dur,type,slide){ const ac=audio(); if(!ac)return; const t=ac.currentTime;
+  const o=ac.createOscillator(),g=ac.createGain(); o.type=type||"sine"; o.frequency.setValueAtTime(freq,t);
+  if(slide) o.frequency.exponentialRampToValueAtTime(slide,t+dur);
+  g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(vol,t+.01); g.gain.exponentialRampToValueAtTime(.0004,t+dur);
+  o.connect(g); g.connect(dest()); if(reverb) g.connect(reverb); o.start(t); o.stop(t+dur+.02); }
+function ping(freq,vol){ if(!play("sonar", vol!=null?Math.min(1,vol*4):.9, true)) tone(760,.14,.5,"sine",560); }
+function boom(){ if(!play("explosion",1,true)) tone(150,.6,.5,"sine",42); }
+function klaxon(){ if(!play("klaxon",.9,false)){ tone(430,.14,.32,"sawtooth"); setTimeout(()=>tone(320,.14,.4,"sawtooth"),330);} }
+function launchSfx(){ if(!play("torpille",.9,false)) tone(900,.12,.5,"sawtooth",300); }
 // hull groan — kept synthesized (no sample supplied)
 function creak(){
   const ac=audio(); if(!ac)return; const t=ac.currentTime;
@@ -1843,7 +1858,9 @@ function showBrief(){
       <span style="color:var(--txt-dim)"> · </span>
       <span id="resetCar" style="font-size:10px;color:var(--txt-dim);cursor:pointer;text-decoration:underline">réinitialiser la carrière</span>
     </div>
+    <div id="sndStat" style="text-align:center;margin-top:4px;font-size:10px;color:var(--txt-dim)"></div>
     ${COMMON_HINT}`;
+  updateSndStat();
   const list=card.querySelector("#scenList");
   const snap=loadPatrol();
   if(snap && snap.patrolTons!=null){
@@ -1923,6 +1940,7 @@ function saidOnceReset(){ for(const k in saidOnce) delete saidOnce[k]; detLockSa
 
 /* ---------- boot ---------- */
 resize(); showBrief(); requestAnimationFrame(loop);
+try{ audio(); updateSndStat(); }catch(e){}   // start decoding samples immediately (context stays suspended until first tap)
 })();
 </script>
 <script>
