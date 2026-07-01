@@ -213,7 +213,7 @@ const norm=a=>{while(a<-Math.PI)a+=TAU;while(a>Math.PI)a-=TAU;return a;};
 
 /* ---------- terrain (seabed + landmasses) ---------- */
 function genTerrain(coastChance=0.5){
-  const deep=280, blobs=[];
+  const deep=250, blobs=[];
   if(Math.random()<coastChance){
     // a coastline hugging the left or right edge (convoy lane stays clear in the centre)
     const right=Math.random()<0.5;
@@ -476,11 +476,13 @@ function updatePlanes(dt){
   if(G.air){ G.planeT-=dt; if(G.planeT<=0 && G.planes.length<1){ spawnPlane(); G.planeT=200+Math.random()*160; } }
   for(const p of G.planes){
     if(p.state==="patrol"){
-      if(s.depth<14 && dist(p.x,p.y,s.x,s.y)<1100){
+      // spotting range depends on depth: easy on the surface, harder at periscope depth, none if deep
+      const spotR = s.depth<6 ? 1300 : s.depth<14 ? 650 : 0;
+      if(spotR>0 && dist(p.x,p.y,s.x,s.y)<spotR){
         p.state="attack"; p.tx=s.x; p.ty=s.y;
         sayOnce("air","Avion droit sur nous — plongée d'urgence !","alarm"); }
     } else if(p.state==="attack"){
-      if(s.depth<14){ p.tx=s.x; p.ty=s.y; }
+      if(s.depth<16){ p.tx=s.x; p.ty=s.y; }        // keeps track only while shallow
       if(dist(p.x,p.y,p.tx,p.ty)<170 && p.dropT<=0){ planeAttack(p); p.dropT=3; p.state="leave"; saidOnce.air=0; }
       const da=norm(angTo(p.x,p.y,p.tx,p.ty)-p.hdg); p.hdg=norm(p.hdg+clamp(da,-0.5*dt,0.5*dt));
     }
@@ -703,7 +705,7 @@ function step(dt){
   // depth toward target — slow, realistic flooding / blowing rates
   const dd=s.tDepth-s.depth;
   s.pitch = clamp(s.pitch + (clamp(dd*0.05,-1,1)-s.pitch)*dt*2, -1,1);
-  const drate=(dd>0?1.8:2.2);                       // m/s dive vs surface
+  const drate=(dd>0?1.8:3.3);                       // m/s : dive slowly, blow tanks to rise fast
   s.depth += Math.sign(dd)*Math.min(Math.abs(dd),drate*dt) + s.leak*0.7*dt;
 
   // seabed: you cannot pass the bottom
@@ -789,6 +791,7 @@ function step(dt){
     if(!c.alive) continue;
     if(c.type==="cargo"){
       c.hdg=norm(c.hdg+clamp(norm(convoyHdg-c.hdg),-0.4*dt,0.4*dt));   // steer onto the zigzag leg
+      avoidMines(c,dt);
       const cnx=c.x+Math.cos(c.hdg)*c.spd*KN*dt, cny=c.y+Math.sin(c.hdg)*c.spd*KN*dt;
       if(!landAt(cnx,cny)){ c.x=cnx; c.y=cny; } else { c.hdg=norm(c.hdg+0.5); }
       if(c.x<60||c.x>WORLD-60||c.y<60||c.y>WORLD-60){ c.fled=true; c.alive=false; G.escaped++; }
@@ -944,9 +947,18 @@ function escortAI(c,dt){
   // steer with a limited turn rate — a ship cannot pivot on the spot
   const da=norm(angTo(c.x,c.y,tx,ty)-c.hdg);
   c.hdg=norm(c.hdg+clamp(da,-turn*dt,turn*dt));
+  avoidMines(c,dt);
   const enx=clamp(c.x+Math.cos(c.hdg)*spd*KN*dt,20,WORLD-20);
   const eny=clamp(c.y+Math.sin(c.hdg)*spd*KN*dt,20,WORLD-20);
   if(!landAt(enx,eny)){ c.x=enx; c.y=eny; } else { c.hdg=norm(c.hdg+1.0); c.fixT=0; }
+}
+function avoidMines(c,dt){
+  const z=G.mineZone; if(!z) return;
+  const d=dist(c.x,c.y,z.x,z.y);
+  if(d < z.r+300){                              // steer to skirt the minefield
+    const away=angTo(z.x,z.y,c.x,c.y);
+    c.hdg=norm(c.hdg + clamp(norm(away-c.hdg),-0.7*dt,0.7*dt));
+  }
 }
 function dropCharges(c){
   boom();
@@ -1159,19 +1171,28 @@ function drawMap(){
     const gy=oy+m*i/6; cx.beginPath();cx.moveTo(ox,gy);cx.lineTo(ox+m,gy);cx.stroke(); }
   cx.strokeStyle="rgba(95,240,138,.22)"; cx.strokeRect(ox,oy,m,m);
 
-  // terrain: shoals + landmasses + reefs
+  // terrain: shoals + landmasses + reefs (labelled like the minefield)
+  const zlabel=(txt,bx,by,col)=>{
+    const lx=clamp(X(bx),ox+22*DPR,ox+m-22*DPR), ly=clamp(Y(by),oy+14*DPR,oy+m-8*DPR);
+    cx.font=`${9*DPR}px monospace`; cx.textAlign="center";
+    cx.fillStyle="rgba(4,10,7,.6)"; const tw=cx.measureText(txt).width;
+    cx.fillRect(lx-tw/2-4*DPR,ly-9*DPR,tw+8*DPR,13*DPR);
+    cx.fillStyle=col; cx.fillText(txt,lx,ly+1*DPR);
+  };
   for(const b of G.terrain.blobs){
     if(b.reef){
       cx.fillStyle="rgba(120,150,90,.14)";
       cx.beginPath(); cx.ellipse(X(b.x),Y(b.y),b.rx*b.shoal*sc,b.ry*b.shoal*sc,0,0,TAU); cx.fill();
       cx.strokeStyle="rgba(150,180,110,.5)"; cx.lineWidth=1*DPR; cx.setLineDash([3*DPR,3*DPR]);
       cx.beginPath(); cx.ellipse(X(b.x),Y(b.y),b.rx*sc,b.ry*sc,0,0,TAU); cx.stroke(); cx.setLineDash([]);
+      zlabel("⚠ HAUT-FOND", b.x, b.y, "rgba(180,205,120,.85)");
       continue;
     }
     cx.fillStyle="rgba(40,95,80,.20)";
     cx.beginPath(); cx.ellipse(X(b.x),Y(b.y),b.rx*b.shoal*sc,b.ry*b.shoal*sc,0,0,TAU); cx.fill();
     cx.fillStyle="#2c3a24"; cx.strokeStyle="#465a35"; cx.lineWidth=1.5*DPR;
     cx.beginPath(); cx.ellipse(X(b.x),Y(b.y),b.rx*sc,b.ry*sc,0,0,TAU); cx.fill(); cx.stroke();
+    zlabel(b.rx>=WORLD*0.4?"CÔTE":"ÎLE", b.x, b.y, "rgba(150,200,140,.9)");
   }
   // minefield danger zone
   if(G.mineZone){
@@ -1180,8 +1201,7 @@ function drawMap(){
     cx.beginPath(); cx.arc(X(z.x),Y(z.y),z.r*sc,0,TAU); cx.fill();
     cx.strokeStyle="rgba(224,83,58,.45)"; cx.lineWidth=1.2*DPR; cx.setLineDash([6*DPR,5*DPR]);
     cx.beginPath(); cx.arc(X(z.x),Y(z.y),z.r*sc,0,TAU); cx.stroke(); cx.setLineDash([]);
-    cx.fillStyle="rgba(224,83,58,.7)"; cx.font=`${9*DPR}px monospace`; cx.textAlign="center";
-    cx.fillText("⚓ MINES", X(z.x), Y(z.y));
+    zlabel("⚓ MINES", z.x, z.y, "rgba(255,120,95,.9)");
   }
 
   // visual range (what the periscope/lookout can see) + hydrophone reach
@@ -1369,8 +1389,11 @@ function drawPeri(){
       const scale=clamp(1600/o.dM,0.22,3.2);
       const fade=clamp(1-(o.dM/visR)*(0.6+fog*0.5),0.05,1); // fade near the limit / in fog
       const swell = sea*scale*4*DPR*Math.sin(G.t*1.5+o.dM*0.01);
+      // foreshortening: angle between the ship's heading and our line of sight
+      const asp=norm(o.c.hdg - angTo(s.x,s.y,o.c.x,o.c.y));
+      const xscale=(asp<0?-1:1)*(0.26+0.74*Math.abs(Math.sin(asp)));  // bow/stern-on → narrow, beam → wide
       cx.globalAlpha=fade;
-      drawShipSil(cx,px,horizon+swell,scale*DPR,o.c.type,o.c.hdg-s.scope);
+      drawShipSil(cx,px,horizon+swell,scale*DPR,o.c.type,xscale);
       cx.globalAlpha=1;
     }
     // explosions in view
@@ -1420,14 +1443,16 @@ function drawPeri(){
     ptext(cx, hh+"h · "+tod.label, w-10*DPR, 20*DPR, "#ffffff",12,"right");
     ptext(cx, env.weather.name, w-10*DPR, 41*DPR, "#ffd24a",12,"right");
 
-    // target under the crosshair — dark pill, bright text
+    // target under the crosshair — dark pill, bright text + aspect
     if(centered && Math.abs(cRel)<8*D2R){
       const label=(centered.c.type==="escort"?"ESCORTE":"LIBERTY")+"  "+Math.round(centered.dM)+" m";
+      const asp=aspectLabel(centered.c,s);
       const ty=horizon-80*DPR;
       cx.font=`bold ${13*DPR}px monospace`; const tw=cx.measureText(label).width;
       cx.fillStyle="rgba(4,8,6,.72)";
       rounded(cx, w*0.5-tw/2-10*DPR, ty-15*DPR, tw+20*DPR, 22*DPR, 5*DPR); cx.fill();
       ptext(cx,label, w*0.5, ty, "#ffd24a",13,"center");
+      ptext(cx,"vu "+asp, w*0.5, ty+18*DPR, "#9dffb8",11,"center");
     }
 
     // ---- bottom firing-solution bar ----
@@ -1487,9 +1512,9 @@ function drawBlast(cx,x,base,sc,prog){
   if(prog>0.4){ cx.fillStyle=`rgba(60,55,55,${(prog-0.4)*0.6})`;
     cx.beginPath(); cx.arc(x,y-r*0.6,r*0.5,0,TAU); cx.fill(); }
 }
-function drawShipSil(cx,x,base,sc,type,relHdg){
-  const wsh=46*sc, hsh=10*sc, beam=0.35+0.65*Math.abs(Math.sin(relHdg));
-  cx.save(); cx.translate(x,base); cx.scale(beam,1); cx.fillStyle="#0d1417";
+function drawShipSil(cx,x,base,sc,type,xscale){
+  const wsh=46*sc, hsh=10*sc;
+  cx.save(); cx.translate(x,base); cx.scale(xscale,1); cx.fillStyle="#0d1417";
   if(type==="escort"){
     // warship: long, low flush-deck hull, gun turrets, two raked funnels
     const w2=wsh*0.60, h2=hsh*0.62;
@@ -1515,6 +1540,14 @@ function drawShipSil(cx,x,base,sc,type,relHdg){
   cx.restore();
 }
 
+function aspectLabel(c,s){
+  const a=Math.abs(norm(c.hdg - angTo(s.x,s.y,c.x,c.y) - Math.PI))*R2D; // 0=de face, 180=de poupe
+  if(a<25)  return "de face";
+  if(a<70)  return "3/4 avant";
+  if(a<110) return "de profil";
+  if(a<155) return "3/4 arrière";
+  return "de poupe";
+}
 function rounded(cx,x,y,w,h,r){
   cx.beginPath();
   cx.moveTo(x+r,y); cx.arcTo(x+w,y,x+w,y+h,r); cx.arcTo(x+w,y+h,x,y+h,r);
