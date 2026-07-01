@@ -842,7 +842,8 @@ function step(dt){
   if(s.crashT>0) s.crashT-=dt;
   if(s.blowT>0)  s.blowT-=dt;
   s.pitch = clamp(s.pitch + (clamp(dd*0.05,-1,1)-s.pitch)*dt*2, -1,1);
-  const drate = dd>0 ? (s.crashT>0?3.4:1.8) : (s.blowT>0?4.8:3.3);   // crash-dive / emergency blow are faster
+  const drate = dd>0 ? (s.crashT>0?1.7:0.85)             // diving is slow & deliberate (crash-dive faster)
+                     : (s.blowT>0?4.8:3.3);              // blowing tanks lifts fast (escape)
   s.depth += Math.sign(dd)*Math.min(Math.abs(dd),drate*dt) + s.leak*0.7*dt;
 
   // seabed: you cannot pass the bottom, but you may leave it freely
@@ -1014,11 +1015,13 @@ function step(dt){
   engineSet(s.vel, s.depth<4);
   if(G.det>=72){ G.hbT=(G.hbT||0)-dt; if(G.hbT<=0){ heartbeat(); G.hbT=clamp(1.5-G.det*0.007,0.5,1.4); } }
 
-  // ---- sonar ping cadence (audio) ----
+  // ---- sonar ping cadence : always leave silence between pings so they never blur into one ----
   G.pingT-=dt;
   if(G.pingT<=0 && nearestEnemy<3000){
     const f=clamp(1-nearestEnemy/3000,0,1);
-    G.pingT = 2.4 - f*1.9;                  // closer = faster
+    const dur=(SND.sonar&&SND.sonar.duration)||1.4;   // let the sample finish first
+    const silence=0.3+(1-f)*2.3;                       // closer → shorter silence, but never zero
+    G.pingT = dur + silence;
     ping(560+f*420, .07+f*.12);
   }
 
@@ -1879,7 +1882,7 @@ function showBrief(){
       <span id="resetCar" style="font-size:10px;color:var(--txt-dim);cursor:pointer;text-decoration:underline">réinitialiser la carrière</span>
     </div>
     <div id="sndStat" style="text-align:center;margin-top:4px;font-size:10px;color:var(--txt-dim)"></div>
-    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v23 — sons à la racine</div>
+    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v24</div>
     ${COMMON_HINT}`;
   updateSndStat();
   const list=card.querySelector("#scenList");
