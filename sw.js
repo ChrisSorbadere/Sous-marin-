@@ -1,4 +1,4 @@
-const CACHE = "uboot-v28";
+const CACHE = "uboot-v29";
 // Precache ONLY the shell. Never include files that might 404 (e.g. sounds) —
 // a single missing file would make addAll() reject and block the whole update.
 const SHELL = [

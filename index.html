@@ -49,10 +49,10 @@
   /* ---- status bar ---- */
   #status{display:flex;background:linear-gradient(#10150f,#070a08);
     border-top:2px solid var(--brass-d);font-size:11px;letter-spacing:.04em}
-  .gz{flex:1;text-align:center;padding:6px 2px 7px;border-right:1px solid #000}
+  .gz{flex:1;min-width:0;text-align:center;padding:6px 1px 7px;border-right:1px solid #000}
   .gz:last-child{border-right:none}
-  .gz .l{color:var(--txt-dim);font-size:9px;text-transform:uppercase;letter-spacing:.1em}
-  .gz .v{color:var(--amber);font-size:16px;font-weight:700;line-height:1.15}
+  .gz .l{color:var(--txt-dim);font-size:8.5px;text-transform:uppercase;letter-spacing:.03em;white-space:nowrap}
+  .gz .v{color:var(--amber);font-size:14px;font-weight:700;line-height:1.15;white-space:nowrap}
   .gz.warn .v{color:var(--red)}
   /* ---- night red-light mode ---- */
   body.night #stage, body.night #status, body.night #ctl, body.night .tabs{
@@ -204,13 +204,13 @@
 </div>
 
 <div id="status">
-  <div class="gz" id="gDepth"><div class="l">Profondeur</div><div class="v" id="sDepth">0</div></div>
+  <div class="gz" id="gDepth"><div class="l">Prof.</div><div class="v" id="sDepth">0</div></div>
   <div class="gz"><div class="l">Cap</div><div class="v" id="sHead">000</div></div>
-  <div class="gz"><div class="l">Vitesse</div><div class="v" id="sSpeed">0</div></div>
-  <div class="gz" id="gDet"><div class="l">Détection</div><div class="v" id="sDet">0%</div>
+  <div class="gz"><div class="l">Vit. nd</div><div class="v" id="sSpeed">0</div></div>
+  <div class="gz" id="gDet"><div class="l">Détect.</div><div class="v" id="sDet">0%</div>
     <div class="dbar"><i id="dbarI"></i></div></div>
   <div class="gz" id="gHull"><div class="l">Coque</div><div class="v" id="sHull">100%</div></div>
-  <div class="gz" id="gBatt"><div class="l">Batterie</div><div class="v" id="sBatt">100%</div></div>
+  <div class="gz" id="gBatt"><div class="l">Batt.</div><div class="v" id="sBatt">100%</div></div>
   <div class="gz" id="gAir"><div class="l">Air</div><div class="v" id="sAir">100%</div></div>
 </div>
 
@@ -2051,7 +2051,7 @@ function hud(){
   const s=G.sub;
   $("#sDepth").textContent=Math.round(s.depth)+" m";
   let hd=Math.round((s.hdg*R2D+90+360)%360); $("#sHead").textContent=String(hd).padStart(3,"0");
-  $("#sSpeed").textContent=s.vel.toFixed(1)+" nd";
+  $("#sSpeed").textContent=s.vel.toFixed(1);
   $("#sDet").textContent=Math.round(G.det)+"%";
   $("#sHull").textContent=Math.round(s.hull)+"%";
   $("#sBatt").textContent=Math.round(s.batt)+"%";
@@ -2176,7 +2176,7 @@ function showBrief(){
       <span id="resetCar" style="font-size:10px;color:var(--txt-dim);cursor:pointer;text-decoration:underline">réinitialiser la carrière</span>
     </div>
     <div id="sndStat" style="text-align:center;margin-top:4px;font-size:10px;color:var(--txt-dim)"></div>
-    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v28</div>
+    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v29</div>
     ${COMMON_HINT}`;
   updateSndStat();
   const list=card.querySelector("#scenList");
