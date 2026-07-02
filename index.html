@@ -163,6 +163,9 @@
   .stn .ln b{color:var(--txt-dim);font-weight:400}
   .stn .ln span{color:var(--txt);text-align:right}
   .ok{color:var(--phos)!important} .amb{color:var(--amber)!important} .bad{color:var(--red)!important}
+  .stn button.rep{background:linear-gradient(#232b25,#141a16);color:var(--txt-dim);border:1px solid #000;
+    border-radius:3px;padding:4px 9px;font:inherit;font-size:11px}
+  .stn button.rep.on{color:var(--phos);border-color:var(--phos-d);box-shadow:0 0 0 1px var(--phos-d) inset}
 </style>
 </head>
 <body>
@@ -208,6 +211,7 @@
     <div class="dbar"><i id="dbarI"></i></div></div>
   <div class="gz" id="gHull"><div class="l">Coque</div><div class="v" id="sHull">100%</div></div>
   <div class="gz" id="gBatt"><div class="l">Batterie</div><div class="v" id="sBatt">100%</div></div>
+  <div class="gz" id="gAir"><div class="l">Air</div><div class="v" id="sAir">100%</div></div>
 </div>
 
 <div id="ctl">
@@ -537,7 +541,7 @@ function newGame(scen){
     t:0, over:false, won:false, running:false,
     sub:{ x:WORLD*0.5, y:WORLD*0.5, hdg:-Math.PI/2, rudder:0,
           spd:1, vel:0, depth:18, tDepth:18, pitch:0,
-          peri:0, periUp:false, silent:false, hull:100,
+          peri:0, periUp:false, silent:false, hull:100, air:100,
           ballast:50, leak:0, fire:0, fireT:0,
           tubes:[{loaded:true,rt:0},{loaded:true,rt:0},{loaded:true,rt:0},{loaded:true,rt:0}],
           reserve:10, tdc:{on:false,tgt:null,valid:false,gyro:0,brg:0,rng:0,spd:0,crs:0},
@@ -1051,13 +1055,30 @@ function step(dt){
   updateTDC(dt);
 
   // leak: takes on water -> slow sink + hull stress; auto-stabilises slowly if shallow & slow
+  // ---- air / CO2 : the boat holds ~10 real minutes of air submerged ----
+  if(s.depth>=4){
+    s.air=clamp(s.air - dt*(0.042 + s.fire*0.10),0,100);
+    if(s.air<40) sayOnce("air40","L'air se vicie — l'équipage respire mal. Il faudra ventiler.","cmd");
+    if(s.air<15) sayOnce("air15","CO₂ critique ! Faites surface pour ventiler !","alarm");
+    if(s.air<=0){ s.hull-=dt*2.5; sayOnce("air0","L'équipage suffoque !","alarm"); }
+  } else if(s.air<100){
+    s.air=clamp(s.air + dt*6,0,100);             // hatches open: fresh Atlantic air
+    if(s.air>=99){ saidOnce.air40=0; saidOnce.air15=0; saidOnce.air0=0; }
+    sayOnce("vent","Ventilation — l'air redevient respirable.","cmd");
+  }
+  if(s.depth>=4) saidOnce.vent=0;
+
+  // ---- damage control : one repair party, pick its priority ----
+  const tgt=G.repairTgt||"auto";
+  const leakRate = tgt==="leak" ? 0.11 : tgt==="auto" ? 0.04 : 0.015;
+  const fireRate = tgt==="fire" ? 0.26 : tgt==="auto" ? 0.10 : 0.04;
   if(s.leak>0){
-    s.leak=clamp(s.leak - dt*0.04,0,3);          // crew patches slowly
+    s.leak=clamp(s.leak - dt*leakRate,0,3);      // crew patches — faster when prioritised
     s.hull-=s.leak*dt*0.5;
   }
   // fire
   if(s.fire>0){
-    s.fire=clamp(s.fire-dt*0.10,0,2); s.hull-=s.fire*dt*0.6;
+    s.fire=clamp(s.fire-dt*fireRate,0,2); s.hull-=s.fire*dt*0.6;
     if(s.fire<=0) say("Incendie maîtrisé.","cmd");
   }
 
@@ -1145,6 +1166,9 @@ function step(dt){
     if(G.det<25 && s.leak<=0 && s.fire<=0 && s.hull<100) s.hull=clamp(s.hull+0.3*dt,0,100);
     if(G.nextConvoyT<=0) nextConvoy();
   }
+  if(G.repairTgt==="hull" && G.det<25 && G.sub.leak<=0 && G.sub.fire<=0 && G.sub.hull<100){
+    G.sub.hull=clamp(G.sub.hull+0.35*dt,0,100);
+  }
 
   // ---- detection accumulation (from living escorts) ----
   const light=todInfo(G.env.clock).light;
@@ -1221,6 +1245,7 @@ function escortAI(c,dt){
     c.asdicT=(c.asdicT||0)-dt;
     if(dM<2400 && c.asdicT<=0){
       c.asdicT=4.0; ping(900,.10);
+      if(dM<2000) vibrate(22);                       // you FEEL the Asdic hit the hull
       G.pings.push({x:c.x,y:c.y,life:1.1,max:1.1});
       if(dec && dist(c.x,c.y,dec.x,dec.y)<2400){
         c.lkx=dec.x; c.lky=dec.y; c.fixT=4;                     // the echo returns the decoy, not us
@@ -1245,7 +1270,8 @@ function escortAI(c,dt){
       tx=c.px; ty=c.py; spd=7; turn=0.07;
       const dM=dist(c.x,c.y,s.x,s.y);
       c.asdicT=(c.asdicT||0)-dt;
-      if(dM<2400 && c.asdicT<=0){ c.asdicT=4.5; ping(900,.09); G.pings.push({x:c.x,y:c.y,life:1.1,max:1.1});
+      if(dM<2400 && c.asdicT<=0){ c.asdicT=4.5; ping(900,.09); if(dM<2000) vibrate(22);
+        G.pings.push({x:c.x,y:c.y,life:1.1,max:1.1});
         const dec=activeDecoy();
         if(dec && dist(c.x,c.y,dec.x,dec.y)<2400){ c.lkx=dec.x; c.lky=dec.y; }
         else { const layer=s.depth>130?0.3:(s.depth<14?0.6:1), still=0.45+0.55*clamp(s.vel/3,0,1);
@@ -1799,6 +1825,9 @@ function drawPeri(){
     for(const o of drawn){ const rs=norm(angTo(s.x,s.y,o.c.x,o.c.y)-s.hdg);
       if(Math.abs(rs)<Math.abs(bowRel)){ bowRel=rs; bowT={...o, rs}; } }
     const aligned = bowT && bowT.dM<TORP_RANGE && (bowT.dM*Math.abs(Math.sin(bowT.rs)) < 95);
+    const solNow = aligned || (s.tdc.on && s.tdc.valid);
+    if(solNow && !G.solPrev){ tone(1180,.16,.09,"square"); vibrate(18); }   // interlock click
+    G.solPrev=solNow;
 
     // bow axis marker — torpedoes run THIS way; turns green when a target is lined up
     const relBow=norm(s.hdg - s.scope);
@@ -1975,11 +2004,18 @@ function updateComms(dt){
      ["État", s.hull<30?"CRITIQUE":s.hull<60?"Endommagée":"Intacte", hullCls],
      ["Profondeur", Math.round(s.depth)+" m / cote "+Math.round(s.tDepth)+" m", s.depth>CRUSH?"bad":""],
    ])+
-   stn("Avaries",[
+   stn("Avaries — équipe de réparation",[
      ["Voie d'eau", s.leak>0?"ACTIVE — colmatage":"Néant", s.leak>0?"bad":"ok"],
      ["Incendie", s.fire>0?"ACTIF":"Néant", s.fire>0?"bad":"ok"],
+     ["Air (CO₂)", Math.round(s.air==null?100:s.air)+" %", (s.air==null?100:s.air)<30?"bad":(s.air==null?100:s.air)<60?"amb":"ok"],
      ["Ballasts", Math.round(s.ballast)+" %"+(s.ballast>70?" (noyés)":s.ballast<20?" (chassés)":" (neutre)")],
-   ])+
+   ]).slice(0,-6)+
+     `<div class="ln" style="gap:5px;justify-content:flex-start;padding-top:5px">
+       <button class="rep${(G.repairTgt||"auto")==="auto"?" on":""}" data-rep="auto">Auto</button>
+       <button class="rep${G.repairTgt==="leak"?" on":""}" data-rep="leak">Voie d'eau</button>
+       <button class="rep${G.repairTgt==="fire"?" on":""}" data-rep="fire">Incendie</button>
+       <button class="rep${G.repairTgt==="hull"?" on":""}" data-rep="hull">Coque</button>
+     </div></div>`+
    stn("Sonar / Veille",[
      ["Hydrophone", s.depth<4?"inutilisable (surface)":(G.sound.length?G.sound.length+" bruit(s) d'hélice":"silence"),
        s.depth<4?"amb":G.sound.length?"ok":""],
@@ -2019,6 +2055,8 @@ function hud(){
   $("#sDet").textContent=Math.round(G.det)+"%";
   $("#sHull").textContent=Math.round(s.hull)+"%";
   $("#sBatt").textContent=Math.round(s.batt)+"%";
+  $("#sAir").textContent=Math.round(s.air==null?100:s.air)+"%";
+  $("#gAir").classList.toggle("warn",(s.air==null?100:s.air)<30);
   $("#gBatt").classList.toggle("warn",s.batt<20);
   $("#gDet").classList.toggle("warn",G.det>=70);
   $("#gHull").classList.toggle("warn",s.hull<45);
@@ -2081,6 +2119,7 @@ function resumePatrol(){
   if(G.bolds==null) G.bolds=4;
   if(!G.decoys) G.decoys=[];
   if(G.gunT==null) G.gunT=0;
+  if(G.sub.air==null) G.sub.air=100;
   G.sub.tdc={on:false,tgt:null,valid:false,gyro:0,brg:0,rng:0,spd:0,crs:0}; // relink safety
   saidOnceReset(); ovl.classList.add("hide"); resize(); updateFireBtn(); syncSpeedBtns();
   say("Patrouille reprise.","cmd");
@@ -2102,7 +2141,7 @@ const COMMON_HINT=`
       <b>Asdic</b> : en chasse, l'escorte « pingue » — plongez sous la couche thermique (~130 m) pour brouiller son écho.
       <b>Batterie</b> : les moteurs électriques se vident en plongée ; faites surface aux diesels (la nuit) pour recharger.
       <b>Gare</b> : torpilles parfois défectueuses, champs de mines (zone rouge) et hauts-fonds (récifs pointillés).
-      <b>Silence total</b> : bouton Silence + machine à Stop = moteurs coupés, équipage figé. Vous devenez quasi introuvable
+      <b>Air</b> : en plongée le CO₂ monte (~10 min d'air) — faites surface pour ventiler. <b>Avaries</b> : aux Postes, choisissez la priorité de l'équipe de réparation. <b>Silence total</b> : bouton Silence + machine à Stop = moteurs coupés, équipage figé. Vous devenez quasi introuvable
       (mais immobile) ; tirer ou souffler les ballasts rompt le silence. Idéal pour semer un destroyer à l'Asdic.
       <b>Patrouille continue</b> : un convoi coulé/dispersé, le sous-marin reste en mer (batterie, coque, avaries conservées),
       l'équipage répare, et un nouveau convoi est signalé. Bouton <b>⚓ Rentrer à la base</b> (carte) pour clore la patrouille.
@@ -2137,7 +2176,7 @@ function showBrief(){
       <span id="resetCar" style="font-size:10px;color:var(--txt-dim);cursor:pointer;text-decoration:underline">réinitialiser la carrière</span>
     </div>
     <div id="sndStat" style="text-align:center;margin-top:4px;font-size:10px;color:var(--txt-dim)"></div>
-    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v27</div>
+    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v28</div>
     ${COMMON_HINT}`;
   updateSndStat();
   const list=card.querySelector("#scenList");
@@ -2211,6 +2250,11 @@ function tutoAdvance(){
     say("Bonne chasse, Kapitän !","cmd"); return; }
   tutoShow();
 }
+$("#comms").addEventListener("click",e=>{
+  const b=e.target.closest("[data-rep]"); if(!b||!G) return;
+  G.repairTgt = b.dataset.rep==="auto" ? null : b.dataset.rep;
+  say("Équipe de réparation : priorité "+({leak:"voie d'eau",fire:"incendie",hull:"coque"}[b.dataset.rep]||"répartie")+".","cmd");
+});
 $("#tutoOK").onclick=()=>{ tutoStep=-1; $("#tuto").classList.remove("on");
   try{ localStorage.setItem("uboot_tuto","1"); }catch(e){} };
 function showEnd(won){
