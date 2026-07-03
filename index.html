@@ -718,7 +718,7 @@ function updatePlanes(dt){
       // spotting range depends on depth: easy on the surface, harder at periscope depth, none if deep
       const spotR = s.depth<6 ? 1300 : s.depth<14 ? 650 : 0;
       if(spotR>0 && dist(p.x,p.y,s.x,s.y)<spotR){
-        p.state="attack"; p.tx=s.x; p.ty=s.y; planeSfx();
+        p.state="attack"; p.tx=s.x; p.ty=s.y; if(s.depth<6) planeSfx();
         sayOnce("air","Avion droit sur nous — plongée d'urgence !","alarm"); }
     } else if(p.state==="attack"){
       if(s.depth<16){ p.tx=s.x; p.ty=s.y; }        // keeps track only while shallow
@@ -1316,8 +1316,11 @@ function step(dt){
 let detLockSaid=false;
 function escortAI(c,dt){
   const s=G.sub;
-  if(G.det>=70){ c.state="hunt"; }
-  else if(G.det<25 && c.state==="hunt"){ c.state="patrol"; }
+  if(G.det>=70){ if(c.state!=="hunt"){ c.state="hunt"; } c.searchT=0; }
+  else if(G.det<25 && c.state==="hunt"){ c.state="search"; c.searchT=80; c.sq=0;
+    say("L'escorte quadrille le secteur — elle ne lâche pas.","cmd"); }
+  else if(c.state==="search"){ c.searchT-=dt; if(c.searchT<=0) c.state="patrol";
+    if(G.det>=45) { c.state="hunt"; } }
 
   c.fixT=(c.fixT||0)-dt;                 // periodic fix, no continuous jitter
   let tx,ty,spd,turn;
@@ -1330,8 +1333,24 @@ function escortAI(c,dt){
         c.lkx=clamp(s.x+(Math.random()-.5)*fuzz,40,WORLD-40);
         c.lky=clamp(s.y+(Math.random()-.5)*fuzz,40,WORLD-40); c.fixT=3.5; }
     }
-    tx=c.lkx; ty=c.lky; spd=11; turn=0.10;
+    // team tactics: nearest hunter is the KILLER (runs in silent), others are POINTERS (hold off, keep pinging)
+    const hunters=G.contacts.filter(k=>k.alive&&k.type==="escort"&&k.state==="hunt");
+    let killer=c;
+    for(const k of hunters){ if(dist(k.x,k.y,s.x,s.y)<dist(killer.x,killer.y,s.x,s.y)) killer=k; }
+    const isKiller = (killer===c) || hunters.length<2;
+    // lead pursuit: aim ahead of the boat's estimated track (better fix = better lead)
+    const q=clamp(G.det/100,0,1);
+    const tLead=dist(c.x,c.y,c.lkx,c.lky)/(12*KN);
+    let ax=c.lkx + Math.cos(s.hdg)*s.vel*KN*tLead*q*0.8;
+    let ay=c.lky + Math.sin(s.hdg)*s.vel*KN*tLead*q*0.8;
+    if(!isKiller){                                    // pointer: stand off ~850 m on the beam, hold contact
+      const away=angTo(s.x,s.y,c.x,c.y);
+      ax=s.x+Math.cos(away)*850; ay=s.y+Math.sin(away)*850;
+    }
+    tx=clamp(ax,40,WORLD-40); ty=clamp(ay,40,WORLD-40);
+    spd=isKiller?12:9; turn=0.11;
     const dM=dist(c.x,c.y,s.x,s.y);
+    if(!isKiller && c.asdicT>1.8) c.asdicT=1.8;       // pointers ping twice as often
     // active Asdic: periodic ping; refines fix & spikes detection when in range & above the layer
     c.asdicT=(c.asdicT||0)-dt;
     if(dM<2400 && c.asdicT<=0){
@@ -1350,7 +1369,25 @@ function escortAI(c,dt){
       }
     }
     c.dcT-=dt;
-    if(dM<340 && c.dcT<=0){ c.dcT=3.0; dropCharges(c); }
+    if(dM<340 && c.dcT<=0){ c.dcT=5.5; dropCharges(c); }
+  } else if(c.state==="search"){
+    // methodical box search around the last datum
+    if(c.fixT<=0){
+      c.sq=(c.sq||0)+1;
+      const leg=400+c.sq*260, ang=c.sq*Math.PI/2 + (c.sqBase||(c.sqBase=Math.random()*TAU));
+      c.px=clamp((c.lkx||s.x)+Math.cos(ang)*leg,40,WORLD-40);
+      c.py=clamp((c.lky||s.y)+Math.sin(ang)*leg,40,WORLD-40); c.fixT=6;
+    }
+    tx=c.px; ty=c.py; spd=8; turn=0.09;
+    const dM=dist(c.x,c.y,s.x,s.y);
+    c.asdicT=(c.asdicT||0)-dt;
+    if(dM<2400 && c.asdicT<=0){ c.asdicT=3.2; ping(900,.09); if(dM<2000) vibrate(22);
+      G.pings.push({x:c.x,y:c.y,life:1.1,max:1.1});
+      const dec=activeDecoy();
+      if(dec && dist(c.x,c.y,dec.x,dec.y)<2400){ c.lkx=dec.x; c.lky=dec.y; }
+      else { const layer=s.depth>130?0.3:(s.depth<14?0.6:1), still=0.45+0.55*clamp(s.vel/3,0,1);
+        const ret=clamp(1-dM/2400,0,1)*layer*still*(1-G.env.weather.sea*0.6);
+        if(ret>0.28){ G.det=clamp(G.det+ret*20,0,100); c.lkx=s.x; c.lky=s.y; c.fixT=0; } } }
   } else {
     detLockSaid=false;
     if(G.scenario.duel){
@@ -1396,14 +1433,36 @@ function avoidHazards(c,dt){
     c.hdg=norm(c.hdg + clamp(norm(away-c.hdg),-0.7*dt,0.7*dt)); }
 }
 function dropCharges(c){
-  splashSfx(); setTimeout(boom,450);               // splash first, detonation follows
+  // depth-charge FUSES: the escort sets them to its ESTIMATE of your depth at drop time.
+  // a fresh Asdic fix = tight estimate; then changing depth before they sink & burst saves you.
   const s=G.sub;
-  const dM=dist(c.x,c.y,s.x,s.y);
-  G.booms.push({x:c.x,y:c.y,life:.5,r:1});
-  // closer + shallower = more damage; deep diving helps
-  const prox=clamp(1-dM/360,0,1);
-  const depthFactor=clamp(1-s.depth/140,0.15,1);   // shallow = worse
-  const dmg=prox*depthFactor*42;
+  const fixAge=clamp(4-(c.fixT||0),0,4);                       // how stale the fix is
+  const err=(18+fixAge*14)*(Math.random()<.5?-1:1)*Math.random();
+  const STOPS=[15,30,50,70,90,120,150,180,210];                // historical fuse settings
+  const want=clamp(s.depth+err,10,220);
+  const fuse=STOPS.reduce((a,b)=>Math.abs(b-want)<Math.abs(a-want)?b:a);
+  // a PATTERN of three charges laid along the escort's run — moving targets get bracketed
+  const drops=[0,1,2].map(i=>({
+    x:c.x+Math.cos(c.hdg)*i*95, y:c.y+Math.sin(c.hdg)*i*95,
+    delay:i*650 + fuse*22 }));                                  // deeper setting = longer sink time
+  for(const d of drops){
+    setTimeout(()=>{ if(!G||G.over) return;
+      splashSfx(); setTimeout(()=>{ if(G&&!G.over){ boom(); chargeHit(d.x,d.y,fuse); } },450);
+      G.booms.push({x:d.x,y:d.y,life:.5,r:1});
+    }, d.delay);
+  }
+}
+function chargeHit(cxp,cyp,fuse){
+  const s=G.sub;
+  const dM=dist(cxp,cyp,s.x,s.y);
+  const dD=Math.abs(s.depth-fuse);                              // vertical miss distance
+  const prox=clamp(1-dM/300,0,1);
+  const depthFactor=clamp(1-dD/50,0,1);                         // burst depth is everything
+  if(prox>0.15 && depthFactor<=0 && !G._fuseMsgT){
+    say(s.depth>fuse?"Les grenades explosent AU-DESSUS de nous !":"Les grenades explosent SOUS nous !","cmd");
+    G._fuseMsgT=1; setTimeout(()=>{ if(G) G._fuseMsgT=0; },4000);
+  }
+  const dmg=prox*depthFactor*30;
   if(dmg>2){
     s.hull-=dmg; G.chargesTaken=(G.chargesTaken||0)+1;
     vibrate(clamp(Math.round(dmg*4),40,300)); if(dmg>18) creak();
@@ -2269,7 +2328,7 @@ const COMMON_HINT=`
       <b>Asdic</b> : en chasse, l'escorte « pingue » — plongez sous la couche thermique (~130 m) pour brouiller son écho.
       <b>Batterie</b> : les moteurs électriques se vident en plongée ; faites surface aux diesels (la nuit) pour recharger.
       <b>Gare</b> : torpilles parfois défectueuses, champs de mines (zone rouge) et hauts-fonds (récifs pointillés).
-      <b>Hydrophone</b> (Carte) : oriente l'écoute avec ◄/► — le battement d'hélices enfle quand un navire est sur le relèvement. <b>Chantier</b> (menu) : dépense ton tonnage en améliorations. <b>Air</b> : en plongée le CO₂ monte (~10 min d'air) — faites surface pour ventiler. <b>Avaries</b> : aux Postes, choisissez la priorité de l'équipe de réparation. <b>Silence total</b> : bouton Silence + machine à Stop = moteurs coupés, équipage figé. Vous devenez quasi introuvable
+      <b>Escortes</b> : elles chassent en équipe (une tient le contact Asdic, l'autre attaque), anticipent ta route et quadrillent le secteur après perte de contact — les grenades sont réglées sur TA profondeur estimée au largage — changer de profondeur (et de cap) pendant qu'elles coulent te met à l'abri ! <b>Hydrophone</b> (Carte) : oriente l'écoute avec ◄/► — le battement d'hélices enfle quand un navire est sur le relèvement. <b>Chantier</b> (menu) : dépense ton tonnage en améliorations. <b>Air</b> : en plongée le CO₂ monte (~10 min d'air) — faites surface pour ventiler. <b>Avaries</b> : aux Postes, choisissez la priorité de l'équipe de réparation. <b>Silence total</b> : bouton Silence + machine à Stop = moteurs coupés, équipage figé. Vous devenez quasi introuvable
       (mais immobile) ; tirer ou souffler les ballasts rompt le silence. Idéal pour semer un destroyer à l'Asdic.
       <b>Patrouille continue</b> : un convoi coulé/dispersé, le sous-marin reste en mer (batterie, coque, avaries conservées),
       l'équipage répare, et un nouveau convoi est signalé. Bouton <b>⚓ Rentrer à la base</b> (carte) pour clore la patrouille.
@@ -2317,7 +2376,7 @@ function showBrief(){
       <span id="resetCar" style="font-size:10px;color:var(--txt-dim);cursor:pointer;text-decoration:underline">réinitialiser la carrière</span>
     </div>
     <div id="sndStat" style="text-align:center;margin-top:4px;font-size:10px;color:var(--txt-dim)"></div>
-    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v33</div>
+    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v35</div>
     ${COMMON_HINT}`;
   updateSndStat();
   const list=card.querySelector("#scenList");
