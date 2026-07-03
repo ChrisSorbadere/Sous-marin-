@@ -66,6 +66,20 @@
   .dbar{height:4px;margin:2px 6px 0;background:#101511;border-radius:2px;overflow:hidden}
   .dbar i{display:block;height:100%;width:0%;background:var(--phos);border-radius:2px;
     transition:width .25s,background .25s}
+  /* ---- in-style confirm dialog ---- */
+  #ask{position:absolute;inset:0;z-index:25;background:rgba(4,7,5,.85);
+    display:flex;align-items:center;justify-content:center;padding:20px}
+  #ask.hide{display:none}
+  .askCard{max-width:340px;width:100%;background:linear-gradient(#141a16,#0a0e0b);
+    border:1px solid var(--brass-d);border-top:3px solid var(--brass);border-radius:4px;
+    padding:16px 18px;box-shadow:0 14px 50px #000}
+  .askCard h2{margin:0 0 8px;font-size:13px;letter-spacing:.14em;color:var(--amber);text-transform:uppercase}
+  .askCard p{margin:0 0 14px;font-size:12.5px;line-height:1.55;color:var(--txt)}
+  .askBtns{display:flex;gap:8px}
+  .askBtns button{flex:1;font:inherit;font-size:12px;font-weight:700;letter-spacing:.06em;
+    text-transform:uppercase;border-radius:3px;padding:10px;cursor:pointer}
+  #askNo{background:linear-gradient(#2c352e,#171d18);color:var(--txt-dim);border:1px solid #000;border-top:1px solid #3a463c}
+  #askYes{background:linear-gradient(#3a4a3c,#1c241e);color:var(--amber);border:1px solid var(--brass-d);border-top:1px solid var(--brass)}
   /* ---- tutorial bubble ---- */
   #tuto{position:absolute;left:10px;right:10px;bottom:64px;z-index:15;display:none;
     background:rgba(10,18,12,.95);border:1px solid var(--phos-d);border-left:4px solid var(--phos);
@@ -205,6 +219,14 @@
   <div id="flash"></div>
   <div id="alert"></div>
   <div id="tuto"><span id="tutoTxt"></span><button class="tOK" id="tutoOK">OK</button></div>
+  <div id="ask" class="hide"><div class="askCard">
+    <h2 id="askTitle">Confirmer</h2>
+    <p id="askTxt"></p>
+    <div class="askBtns">
+      <button id="askNo">Annuler</button>
+      <button id="askYes">Confirmer</button>
+    </div>
+  </div></div>
 
   <div id="ovl">
     <div class="card" id="card"></div>
@@ -215,7 +237,7 @@
   <div class="gz" id="gDepth"><div class="l">Prof.</div><div class="v" id="sDepth">0</div></div>
   <div class="gz"><div class="l">Cap</div><div class="v" id="sHead">000</div></div>
   <div class="gz"><div class="l">Vit. nd</div><div class="v" id="sSpeed">0</div></div>
-  <div class="gz" id="gDet"><div class="l">Détect.</div><div class="v" id="sDet">0%</div>
+  <div class="gz" id="gDet"><div class="l">Alerte</div><div class="v" id="sDet">R.A.S.</div>
     <div class="dbar"><i id="dbarI"></i></div></div>
   <div class="gz" id="gHull"><div class="l">Coque</div><div class="v" id="sHull">100%</div></div>
   <div class="gz" id="gBatt"><div class="l">Batt.</div><div class="v" id="sBatt">100%</div></div>
@@ -517,6 +539,100 @@ function radioReport(){
 
 /* ---------- passive sonar (hydrophone) — bearings only ---------- */
 let hydroT=0;
+function updateEvents(dt){
+  if(G.over) return;
+  if(G.engineFail>0){
+    G.engineFail-=dt;
+    if(G.engineFail<=0) say("Machines réparées — pleine puissance disponible.","cmd");
+  }
+  if(G.scenario.duel) return;
+  G.evtT-=dt;
+  if(G.evtT>0 || G.evtCount>=3) return;
+  G.evtT=160+Math.random()*180; 
+  const s=G.sub, esc=G.contacts.filter(c=>c.alive&&c.type==="escort").length;
+  const pool=[];
+  if(G.phase==="attack" && G.merchSunk>0 && esc>0 && esc<3) pool.push("renfort");
+  if(G.engineFail<=0) pool.push("panne");
+  pool.push("meteo");
+  if(G.phase==="transit") pool.push("intel");
+  if(!pool.length) return;
+  const ev=pool[Math.floor(Math.random()*pool.length)];
+  G.evtCount++;
+  if(ev==="renfort"){
+    const m=G.contacts.find(c=>c.alive&&c.type==="cargo")||s;
+    const edge=Math.random()<0.5;
+    const ex=edge?(Math.random()<0.5?80:WORLD-80):clamp(m.x+(Math.random()-.5)*3000,80,WORLD-80);
+    const ey=edge?clamp(m.y+(Math.random()-.5)*3000,80,WORLD-80):(Math.random()<0.5?80:WORLD-80);
+    G.contacts.push({type:"escort", x:ex, y:ey, hdg:angTo(ex,ey,m.x,m.y), spd:7,
+      alive:true, state:"patrol", fixT:0, dcT:0, lkx:0, lky:0, px:0, py:0, hp:6, tons:1300});
+    say("Hydrophone : hélices RAPIDES en approche — une escorte rejoint le convoi !","alarm");
+  } else if(ev==="panne"){
+    G.engineFail=60+Math.random()*40;
+    say("AVARIE MACHINE ! Vitesse limitée à « Lente » le temps des réparations.","alarm"); vibrate(60);
+  } else if(ev==="meteo"){
+    const cur=G.env.weather.id;
+    const next = (cur==="fog"||cur==="storm") ? WEATHERS[0] : WEATHERS[2+Math.floor(Math.random()*2)];
+    G.env.weather=next;
+    say(next.id==="clear" ? "Le temps se lève — visibilité en hausse… pour tout le monde."
+        : "La météo se dégrade : "+next.name.toLowerCase()+". Bonne couverture pour approcher.","cmd");
+  } else if(ev==="intel"){
+    G.nextConvoyT=Math.min(G.nextConvoyT||30, 12);
+    radioReport();
+    say("Radio BdU : convoi signalé à proximité — route d'interception favorable !","cmd");
+  }
+}
+function updateMission(dt){
+  const M=G.mission; if(!M) return;
+  const s=G.sub;
+  if(G.missionAnnT>0){
+    G.missionAnnT-=dt;
+    if(G.missionAnnT<=0){
+      if(M.type==="troop") say("Radio BdU : un TRANSPORT DE TROUPES voyage dans le convoi. Priorité absolue — prime au tonnage.","cmd");
+      else if(M.type==="weather") say("Radio BdU : rapport météo exigé au point marqué sur la carte. Émission en SURFACE, 2 minutes.","cmd");
+      else if(M.type==="straggler"){
+        say("Radio BdU : un cargo isolé, traînard d'un convoi, est signalé dans le secteur. Proie facile… en principe.","cmd");
+        if(!M.spawned){ M.spawned=true; M.state="active";
+          const a=Math.random()*TAU, d=2600+Math.random()*900;
+          const x=clamp(s.x+Math.cos(a)*d,120,WORLD-120), y=clamp(s.y+Math.sin(a)*d,120,WORLD-120);
+          G.contacts.push({type:"cargo", kind:M.qship?"qship":"liberty", straggler:true,
+            x,y, hdg:Math.random()*TAU, spd:3.5, alive:true, fled:false, hp:4,
+            tons:6000+Math.floor(Math.random()*3)*1000, gunT:0});
+        }
+      }
+      if(M.type==="weather") M.state="active";
+    }
+  }
+  // weather report: hold position on the surface at the mark
+  if(M.type==="weather" && M.state==="active"){
+    const dM=dist(s.x,s.y,M.x,M.y);
+    if(dM<250 && s.depth<4){
+      if(M.t===120) say("Au point météo — émission en cours, restez en surface !","cmd");
+      M.t-=dt;
+      if(M.t<=0){ missionDone("Rapport météo transmis au BdU."); }
+    } else if(M.t<120 && M.t>0){ sayOnce("wx","Émission interrompue — revenez au point, en surface.","cmd"); }
+  }
+  // Q-ship: the "easy prey" opens fire when you close in on the surface
+  if(M.type==="straggler" && M.state==="active"){
+    const q=G.contacts.find(c=>c.straggler&&c.alive);
+    if(q && M.qship){
+      const dM=dist(s.x,s.y,q.x,q.y);
+      if(s.depth<4 && dM<1100){
+        if(!q.revealed){ q.revealed=true;
+          say("Les panneaux tombent — c'est un NAVIRE-PIÈGE ! Il ouvre le feu !","alarm"); vibrate([0,120,60,120]); }
+        q.gunT-=dt;
+        if(q.gunT<=0){ q.gunT=2.2; play("explosion",.3,false,1.8);
+          const pHit=clamp(1-dM/1300,0.25,0.85);
+          if(Math.random()<pHit){ s.hull-=4+Math.random()*5; flashScreen(); vibrate(80);
+            say("Coup au but ennemi ! Plongez !","alarm"); } }
+      }
+    }
+  }
+}
+function missionDone(txt){
+  const M=G.mission; M.state="done";
+  say(txt+" Prime : "+M.prime.toLocaleString("fr")+" t.","cmd");
+  creditTons(M.prime); logSink("Prime BdU",M.prime,G.sub.x,G.sub.y);
+}
 function updateAllies(dt){
   for(const a of (G.allies||[])){
     // shadow the nearest live merchant, then loose a torpedo now and then
@@ -608,7 +724,7 @@ function newGame(scen){
           reserve:hasUpg('typeIX')?16:10, tdc:{on:false,tgt:null,valid:false,gyro:0,brg:0,rng:0,spd:0,crs:0},
           batt:100, scopeRel:0, scope:-Math.PI/2 },
     contacts:[], torps:[], booms:[], planes:[], wrecks:[], pings:[], mines:[], decoys:[],
-    shells:60, bolds:4, gunT:0,
+    shells:60, bolds:4, gunT:0, evtT:90+Math.random()*120, evtCount:0, engineFail:0,
     intel:[], sound:[], scopeRot:0, mineZone:null,
     pingT:0, det:0, merchSunk:0, escaped:0, patrolTons:0,
     convoyBase:0, zig:0, zigDir:1, zigT:18,
@@ -618,6 +734,17 @@ function newGame(scen){
     radioT: scen.duel?1e9:5,
     env:{ weather, clock },
   };
+  // ---- BdU special orders (one per patrol, convoy scenarios only) ----
+  G.mission=null; G.missionAnnT=0;
+  if(!scen.duel){
+    const mt=Math.random();
+    if(mt<0.30) G.mission={type:"troop", state:"pending", prime:3000};
+    else if(mt<0.58) G.mission={type:"weather", state:"pending", prime:2500,
+      x:WORLD*(0.15+Math.random()*0.7), y:WORLD*(0.15+Math.random()*0.7), t:120};
+    else if(mt<0.82) G.mission={type:"straggler", state:"pending", prime:2000,
+      qship:Math.random()<0.3, spawned:false};
+    G.missionAnnT=20+Math.random()*25;
+  }
   G.terrain=genTerrain(scen.coast);
   placeSub();
   spawnConvoy(scen);
@@ -652,11 +779,14 @@ function spawnConvoy(scen){
     const col=i%cols, row=Math.floor(i/cols);
     const ox=Math.cos(beam)*(col-0.5)*340 + Math.cos(along)*-row*300;
     const oy=Math.sin(beam)*(col-0.5)*340 + Math.sin(along)*-row*300;
-    const tank=Math.random()<0.33;                      // about one in three is a fat tanker
-    G.contacts.push({type:"cargo", kind:tank?"tanker":"liberty",
+    const troop = G.mission && G.mission.type==="troop" && G.mission.state==="pending" && i===0;
+    const tank=!troop && Math.random()<0.33;            // about one in three is a fat tanker
+    if(troop) G.mission.state="active";
+    G.contacts.push({type:"cargo", kind:troop?"troop":(tank?"tanker":"liberty"),
       x:clamp(cxc+ox,100,WORLD-100), y:clamp(cyc+oy,100,WORLD-100),
-      hdg:course, spd:5, alive:true, fled:false, hp:tank?5:4,
-      tons: tank ? 9000+Math.floor(Math.random()*4)*1000 : 6000+Math.floor(Math.random()*4)*1000});
+      hdg:course, spd:5, alive:true, fled:false, hp:troop?6:(tank?5:4),
+      tons: troop ? 11000+Math.floor(Math.random()*4)*1000
+           : tank ? 9000+Math.floor(Math.random()*4)*1000 : 6000+Math.floor(Math.random()*4)*1000});
   }
   for(let e=0;e<scen.escorts;e++){
     const side=(e%2?1:-1), lead=(e===0);
@@ -835,13 +965,21 @@ const MAPV={z:1, cx:WORLD/2, cy:WORLD/2, toWorld:null};
     ["pointerup","pointerleave","pointercancel"].forEach(ev=>b.addEventListener(ev,stop));
   });
 })();
+function askConfirm(title,txt,onYes){
+  $("#askTitle").textContent=title; $("#askTxt").textContent=txt;
+  $("#ask").classList.remove("hide");
+  $("#askYes").onclick=()=>{ $("#ask").classList.add("hide"); onYes(); };
+  $("#askNo").onclick=()=>$("#ask").classList.add("hide");
+}
 $("#btnBase").onclick=()=>{
   if(!G||G.over) return;
   if(G.phase==="attack" && G.contacts.some(c=>c.type==="cargo"&&c.alive)){
-    say("Convoi en vue — terminez l'engagement ou attendez la dispersion avant de rentrer.","cmd");
-    if(!confirm("Rentrer à la base maintenant et clore la patrouille ?")) return;
+    askConfirm("Retour à la base",
+      "Un convoi est encore en vue. Rentrer maintenant clôt la patrouille et crédite le tonnage acquis. Confirmer ?",
+      returnToBase);
+    return;
   }
-  returnToBase();
+  askConfirm("Retour à la base","Clore la patrouille et rentrer au port ?",returnToBase);
 };
 // machine
 function syncSpeedBtns(){ document.querySelectorAll("[data-spd]").forEach(x=>x.classList.toggle("on",+x.dataset.spd===G.sub.spd)); }
@@ -1077,7 +1215,8 @@ function step(dt){
   if(!surfaced && s.batt<=1){ if(s.spd>1){ s.spd=1; syncSpeedBtns(); }
     sayOnce("batt","Batterie à plat — vitesse réduite. Faire surface aux diesels.","alarm"); }
   else if(s.batt>15){ saidOnce.batt=0; }
-  const speedKn=SPEEDS[s.spd]*(surfaced?1.7:1);      // diesels run faster on the surface
+  const effSpd=(G.engineFail>0)?Math.min(s.spd,1):s.spd;   // machinery casualty caps at Lente
+  const speedKn=SPEEDS[effSpd]*(surfaced?2.2:1);      // Type VII: ~17.7 kn surfaced, ~7.6 submerged
   s.vel += (speedKn - s.vel)*Math.min(1,dt*0.5);     // inertia
   if(G.courseTgt){                                   // tap-set course: helm steers for you
     const want=angTo(s.x,s.y,G.courseTgt.x,G.courseTgt.y);
@@ -1194,7 +1333,11 @@ function step(dt){
         if(t.ally){ sinkAllied(c); break; }
         G.hits++;
         if(t.run>(G.longestHit||0)) G.longestHit=Math.round(t.run);
-        sinkShip(c);
+        if(c.type!=="cargo" || c.sinking || Math.random()<0.35){
+          sinkShip(c, c.sinking);                       // breaks in two / coup de grâce
+        } else {
+          startSinking(c);                              // she settles slowly — will she go down?
+        }
         break;
       }
     }
@@ -1305,8 +1448,17 @@ function step(dt){
   G.wrecks=G.wrecks.filter(w=>{ w.life-=dt; return w.life>0; });
   G.pings=G.pings.filter(p=>{ p.life-=dt; return p.life>0; });
   if(G.gunT>0) G.gunT-=dt;
+  updateMission(dt);
+  updateEvents(dt);
   if(tutoStep>=0 && TUTO[tutoStep].done()) tutoAdvance();
   G.decoys=(G.decoys||[]).filter(d=>{ d.t-=dt; return d.t>0; });
+  for(const c of G.contacts){
+    if(!c.alive||!c.sinking) continue;
+    c.sinkT-=dt;
+    if(c.burning && Math.random()<dt*0.5)
+      G.explosions.push({x:c.x+(Math.random()-.5)*40,y:c.y+(Math.random()-.5)*40,life:0.9,max:0.9});
+    if(c.sinkT<=0) sinkShip(c,true);
+  }
 
   // hull / lose
   s.hull=clamp(s.hull,0,100);
@@ -1486,6 +1638,13 @@ function creditTons(tons){
   G.patrolTons += tons;
   const car=loadCareer(); car.tonnage += tons; saveCareer(car);
 }
+function startSinking(c){
+  c.sinking=true; c.sinkT0=c.sinkT=45+Math.random()*95;   // 45–140 s to founder
+  c.spd=0.6; c.burning = c.kind==="tanker" || Math.random()<0.35;
+  surfBoom(); flashScreen(); vibrate([0,120,40,80]);
+  G.explosions.push({x:c.x,y:c.y,life:2.2,max:2.2});
+  say("TORPILLE AU BUT ! Le "+shipLabel(c).toLowerCase()+" stoppe et prend de la bande"+(c.burning?" — il brûle !":"…"),"alarm");
+}
 function sinkAllied(c){
   c.alive=false; surfBoom(); 
   G.explosions.push({x:c.x,y:c.y,life:2.6,max:2.6}); G.wrecks.push({x:c.x,y:c.y,life:7});
@@ -1494,22 +1653,29 @@ function sinkAllied(c){
     if(G.merchSunk>=G.need) disperseConvoy(true);
   } else say("Un U-Boot allié a coulé une escorte !","cmd");
 }
-function shipLabel(c){ return c.type==="escort" ? "Escorte" : (c.kind==="tanker" ? "Pétrolier" : "Cargo"); }
-function sinkShip(c){
-  c.alive=false; surfBoom(); flashScreen(); vibrate([0,140,40,90]);
+function shipLabel(c){ return c.type==="escort" ? "Escorte" : c.kind==="troop" ? "Transport de troupes" : (c.kind==="qship"&&c.revealed) ? "Q-ship" : c.kind==="tanker" ? "Pétrolier" : "Cargo"; }
+function sinkShip(c,slow){
+  c.alive=false;
+  if(!slow){ surfBoom(); flashScreen(); vibrate([0,140,40,90]); } else { boom(); }
   const big = c.kind==="tanker";
   if(big){ setTimeout(boom,350); }                          // fuel goes up in a second blast
   G.explosions.push({x:c.x,y:c.y,life:big?4:2.6,max:big?4:2.6});
   G.wrecks.push({x:c.x,y:c.y,life:big?12:7});
-  if(c.type==="cargo"){ onMerchantSunk(c); }
+  if(c.type==="cargo"){ onMerchantSunk(c,slow); }
   else { creditTons(c.tons||1300); logSink("Escorte",c.tons||1300,c.x,c.y); say("Escorte coulée !","alarm"); }
 }
-function onMerchantSunk(c){
+function onMerchantSunk(c,slow){
   if(G.over) return;
+  const M=G.mission;
+  if(M&&M.state!=="done"){
+    if(M.type==="troop" && c.kind==="troop") missionDone("Le transport de troupes est au fond !");
+    if(M.type==="straggler" && c.straggler) missionDone(c.kind==="qship"?"Le navire-piège est coulé !":"Le traînard est coulé.");
+  }
   const tank = c&&c.kind==="tanker";
   G.merchSunk++; creditTons((c&&c.tons)||7000); logSink(tank?"Pétrolier":"Cargo",(c&&c.tons)||7000,c.x,c.y);
-  say(tank?`TOUCHÉ ! Pétrolier en flammes (${G.merchSunk}/${G.need}) !`
-          :`TOUCHÉ ! Liberty ship coulé (${G.merchSunk}/${G.need}).`,"alarm");
+  say(slow ? `Le ${shipLabel(c).toLowerCase()} a sombré (${G.merchSunk}/${G.need}) — tonnage crédité.`
+      : tank ? `TOUCHÉ ! Pétrolier en flammes (${G.merchSunk}/${G.need}) !`
+      : `TOUCHÉ ! Liberty ship coulé (${G.merchSunk}/${G.need}).`,"alarm");
   if(G.merchSunk>=G.need) disperseConvoy(true);
 }
 function disperseConvoy(success){
@@ -1825,7 +1991,7 @@ function drawMap(){
     cx.lineTo(px+Math.cos(c.hdg)*11*DPR,py+Math.sin(c.hdg)*11*DPR); cx.stroke();
     cx.fillStyle= esc?`rgba(224,83,58,${a})`:`rgba(232,185,74,${a})`;
     cx.font=`${9*DPR}px monospace`; cx.textAlign="center";
-    cx.fillText(esc?"ESCORTE":(c.kind==="tanker"?"PÉTROLIER":"LIBERTY"),px,py-9*DPR);
+    cx.fillText(c.sinking?"EN PERDITION":esc?"ESCORTE":c.kind==="troop"?"TRANSPORT":(c.kind==="qship"&&c.revealed)?"Q-SHIP":c.kind==="tanker"?"PÉTROLIER":"LIBERTY",px,py-9*DPR);
   }
 
   // TDC locked target bracket
@@ -1896,6 +2062,15 @@ function drawMap(){
   cx.fillStyle="rgba(95,240,138,.5)"; cx.font=`${10*DPR}px monospace`;
   cx.textAlign="left"; cx.fillText("N",ox+m/2-3*DPR,oy+12*DPR);
   cx.textAlign="left"; cx.fillStyle="rgba(232,185,74,.85)"; cx.font=`${11*DPR}px monospace`;
+  // weather-report mark
+  if(G.mission && G.mission.type==="weather" && G.mission.state!=="done"){
+    const M=G.mission, px=X(M.x),py=Y(M.y);
+    cx.strokeStyle="rgba(120,200,255,.85)"; cx.lineWidth=1.5*DPR; cx.setLineDash([5*DPR,4*DPR]);
+    cx.beginPath(); cx.arc(px,py,10*DPR,0,TAU); cx.stroke(); cx.setLineDash([]);
+    cx.fillStyle="rgba(120,200,255,.9)"; cx.font=`${9*DPR}px monospace`; cx.textAlign="center";
+    cx.fillText(M.state==="active"&&M.t<120?("MÉTÉO "+Math.ceil(M.t)+" s"):"MÉTÉO",px,py-14*DPR);
+  }
+
   // tap-set waypoint marker
   if(G.courseTgt){
     const px=X(G.courseTgt.x),py=Y(G.courseTgt.y);
@@ -1927,6 +2102,12 @@ function drawMap(){
     : G.scenario.duel ? "DUEL — couler le destroyer"
     : `Convoi #${G.convoyNum||1} — coulés ${G.merchSunk}/${G.need}`;
   cx.fillText(obj, ox+8*DPR, oy+m-10*DPR);
+  if(G.mission && G.mission.state!=="done" && G.missionAnnT<=0){
+    const mtxt = G.mission.type==="troop" ? "ORDRE : couler le TRANSPORT du convoi"
+      : G.mission.type==="weather" ? "ORDRE : rapport météo au point marqué (surface)"
+      : "ORDRE : couler le cargo isolé signalé";
+    cx.fillStyle="rgba(120,200,255,.85)"; cx.fillText(mtxt, ox+8*DPR, oy+m-24*DPR);
+  }
   if(MAPV.z>1.01){ cx.fillStyle="rgba(152,166,150,.8)"; cx.font=`${9*DPR}px monospace`; cx.textAlign="right";
     cx.fillText("zoom ×"+MAPV.z.toFixed(1)+" — double-toucher : réinitialiser", ox+m-8*DPR, oy+m-10*DPR); cx.textAlign="left"; }
 }
@@ -1978,8 +2159,9 @@ function drawPeri(){
       // foreshortening: angle between the ship's heading and our line of sight
       const asp=norm(o.c.hdg - angTo(s.x,s.y,o.c.x,o.c.y));
       const xscale=(asp<0?-1:1)*(0.26+0.74*Math.abs(Math.sin(asp)));  // bow/stern-on → narrow, beam → wide
+      const sink01 = o.c.sinking ? clamp(1-o.c.sinkT/o.c.sinkT0,0,1) : 0;
       cx.globalAlpha=fade;
-      drawShipSil(cx,px,horizon+swell,scale*DPR,o.c.type,xscale);
+      drawShipSil(cx,px,horizon+swell,scale*DPR,o.c.type,xscale,sink01,o.c.burning);
       cx.globalAlpha=1;
     }
     // explosions in view
@@ -2039,14 +2221,16 @@ function drawPeri(){
 
     // target under the crosshair — dark pill, bright text + aspect
     if(centered && Math.abs(cRel)<8*D2R){
-      const label=(centered.c.type==="escort"?"ESCORTE":(centered.c.kind==="tanker"?"PÉTROLIER":"LIBERTY"))+"  "+Math.round(centered.dM)+" m";
+      const kk=centered.c.kind;
+      const label=(centered.c.type==="escort"?"ESCORTE":kk==="troop"?"TRANSPORT":(kk==="qship"&&centered.c.revealed)?"Q-SHIP":kk==="tanker"?"PÉTROLIER":"LIBERTY")+"  "+Math.round(centered.dM)+" m";
       const asp=aspectLabel(centered.c,s);
       const ty=horizon-80*DPR;
       cx.font=`bold ${13*DPR}px monospace`; const tw=cx.measureText(label).width;
       cx.fillStyle="rgba(4,8,6,.72)";
       rounded(cx, w*0.5-tw/2-10*DPR, ty-15*DPR, tw+20*DPR, 22*DPR, 5*DPR); cx.fill();
       ptext(cx,label, w*0.5, ty, "#ffd24a",13,"center");
-      ptext(cx,"vu "+asp, w*0.5, ty+18*DPR, "#9dffb8",11,"center");
+      ptext(cx, centered.c.sinking?"EN PERDITION — l'achever ou attendre":"vu "+asp, w*0.5, ty+18*DPR,
+        centered.c.sinking?"#ffb04a":"#9dffb8",11,"center");
     }
 
     // ---- bottom firing-solution bar ----
@@ -2106,9 +2290,11 @@ function drawBlast(cx,x,base,sc,prog){
   if(prog>0.4){ cx.fillStyle=`rgba(60,55,55,${(prog-0.4)*0.6})`;
     cx.beginPath(); cx.arc(x,y-r*0.6,r*0.5,0,TAU); cx.fill(); }
 }
-function drawShipSil(cx,x,base,sc,type,xscale){
+function drawShipSil(cx,x,base,sc,type,xscale,sink01,burning){
   const wsh=46*sc, hsh=10*sc;
-  cx.save(); cx.translate(x,base); cx.scale(xscale,1); cx.fillStyle="#0d1417";
+  cx.save(); cx.translate(x,base);
+  if(sink01){ cx.translate(0,hsh*2.6*sink01); cx.rotate(0.30*sink01); }   // settling by the bow, listing
+  cx.scale(xscale,1); cx.fillStyle="#0d1417";
   if(type==="escort"){
     // warship: long, low flush-deck hull, gun turrets, two raked funnels
     const w2=wsh*0.60, h2=hsh*0.62;
@@ -2187,6 +2373,7 @@ function updateComms(dt){
    stn("Avaries — équipe de réparation",[
      ["Voie d'eau", s.leak>0?"ACTIVE — colmatage":"Néant", s.leak>0?"bad":"ok"],
      ["Incendie", s.fire>0?"ACTIF":"Néant", s.fire>0?"bad":"ok"],
+     ["Machines", G.engineFail>0?"AVARIE — vitesse limitée":"Nominales", G.engineFail>0?"bad":"ok"],
      ["Air (CO₂)", Math.round(s.air==null?100:s.air)+" %", (s.air==null?100:s.air)<30?"bad":(s.air==null?100:s.air)<60?"amb":"ok"],
      ["Ballasts", Math.round(s.ballast)+" %"+(s.ballast>70?" (noyés)":s.ballast<20?" (chassés)":" (neutre)")],
    ]).slice(0,-6)+
@@ -2216,6 +2403,9 @@ function updateComms(dt){
         (!G.scenario.duel&&G.merchSunk>=G.need)?"ok":""],
      ["Discrétion", G.totalSilence?"SILENCE TOTAL":(s.silent?"Silencieux":"Normal"),
         G.totalSilence?"ok":(s.silent?"amb":"")],
+     ["Ordre BdU", !G.mission?"—":G.mission.state==="done"?"ACCOMPLI":G.missionAnnT>0?"En attente radio"
+        :(G.mission.type==="troop"?"Couler le transport":G.mission.type==="weather"?"Rapport météo":"Cargo isolé"),
+        G.mission&&G.mission.state==="done"?"ok":"amb"],
      ["Phase", G.phase==="transit"?"Patrouille / réparations":"Engagement", G.phase==="transit"?"amb":""],
      ["Tonnage patrouille", (G.patrolTons||0).toLocaleString("fr")+" t"],
    ])+
@@ -2232,13 +2422,18 @@ function hud(){
   $("#sDepth").textContent=Math.round(s.depth)+" m";
   let hd=Math.round((s.hdg*R2D+90+360)%360); $("#sHead").textContent=String(hd).padStart(3,"0");
   $("#sSpeed").textContent=s.vel.toFixed(1);
-  $("#sDet").textContent=Math.round(G.det)+"%";
+  // what the CREW can actually tell: pings on the hull, screws closing in — not a number
+  const hunted=G.contacts.some(c=>c.alive&&c.type==="escort"&&c.state==="hunt");
+  const searched=G.contacts.some(c=>c.alive&&c.type==="escort"&&c.state==="search");
+  const alertTxt = hunted?"ACCROCHÉ":searched?"TRAQUE":"R.A.S.";
+  $("#sDet").textContent=alertTxt;
+  $("#sDet").style.fontSize="12px";
   $("#sHull").textContent=Math.round(s.hull)+"%";
   $("#sBatt").textContent=Math.round(s.batt)+"%";
   $("#sAir").textContent=Math.round(s.air==null?100:s.air)+"%";
   $("#gAir").classList.toggle("warn",(s.air==null?100:s.air)<30);
   $("#gBatt").classList.toggle("warn",s.batt<20);
-  $("#gDet").classList.toggle("warn",G.det>=70);
+  $("#gDet").classList.toggle("warn",hunted);
   $("#gHull").classList.toggle("warn",s.hull<45);
   $("#gDepth").classList.toggle("warn",s.depth>CRUSH);
   // periscope button reflects the ACTUAL deployment, not just the order
@@ -2255,9 +2450,9 @@ function hud(){
   $("#bFire").textContent="Feu "+s.tubes.map(t=>t.loaded?"◉":"◌").join("");
   // detection: colour bar + pulsing alert border
   const db=$("#dbarI");
-  db.style.width=Math.round(G.det)+"%";
-  db.style.background = G.det<40?"var(--phos)":G.det<70?"var(--amber)":"var(--red)";
-  $("#alert").classList.toggle("on", G.det>=70);
+  db.style.width = hunted?"100%":searched?"55%":"0%";
+  db.style.background = hunted?"var(--red)":"var(--amber)";
+  $("#alert").classList.toggle("on", hunted);
   // night red-light mode inside the boat
   document.body.classList.toggle("night", todInfo(G.env.clock).light<=0.30);
   // deck gun & Bold decoy availability + stock readouts
@@ -2328,7 +2523,7 @@ const COMMON_HINT=`
       <b>Asdic</b> : en chasse, l'escorte « pingue » — plongez sous la couche thermique (~130 m) pour brouiller son écho.
       <b>Batterie</b> : les moteurs électriques se vident en plongée ; faites surface aux diesels (la nuit) pour recharger.
       <b>Gare</b> : torpilles parfois défectueuses, champs de mines (zone rouge) et hauts-fonds (récifs pointillés).
-      <b>Escortes</b> : elles chassent en équipe (une tient le contact Asdic, l'autre attaque), anticipent ta route et quadrillent le secteur après perte de contact — les grenades sont réglées sur TA profondeur estimée au largage — changer de profondeur (et de cap) pendant qu'elles coulent te met à l'abri ! <b>Hydrophone</b> (Carte) : oriente l'écoute avec ◄/► — le battement d'hélices enfle quand un navire est sur le relèvement. <b>Chantier</b> (menu) : dépense ton tonnage en améliorations. <b>Air</b> : en plongée le CO₂ monte (~10 min d'air) — faites surface pour ventiler. <b>Avaries</b> : aux Postes, choisissez la priorité de l'équipe de réparation. <b>Silence total</b> : bouton Silence + machine à Stop = moteurs coupés, équipage figé. Vous devenez quasi introuvable
+      <b>Naufrage</b> : un navire torpillé coule souvent LENTEMENT (il stoppe, gîte, brûle parfois) — le tonnage n'est crédité que quand il sombre ; une 2e torpille ou le canon l'achève. <b>Ordres du BdU</b> : la radio peut assigner une mission spéciale (transport de troupes, rapport météo, cargo isolé… méfiance) avec prime au tonnage. <b>Escortes</b> : elles chassent en équipe (une tient le contact Asdic, l'autre attaque), anticipent ta route et quadrillent le secteur après perte de contact — les grenades sont réglées sur TA profondeur estimée au largage — changer de profondeur (et de cap) pendant qu'elles coulent te met à l'abri ! <b>Hydrophone</b> (Carte) : oriente l'écoute avec ◄/► — le battement d'hélices enfle quand un navire est sur le relèvement. <b>Chantier</b> (menu) : dépense ton tonnage en améliorations. <b>Air</b> : en plongée le CO₂ monte (~10 min d'air) — faites surface pour ventiler. <b>Avaries</b> : aux Postes, choisissez la priorité de l'équipe de réparation. <b>Silence total</b> : bouton Silence + machine à Stop = moteurs coupés, équipage figé. Vous devenez quasi introuvable
       (mais immobile) ; tirer ou souffler les ballasts rompt le silence. Idéal pour semer un destroyer à l'Asdic.
       <b>Patrouille continue</b> : un convoi coulé/dispersé, le sous-marin reste en mer (batterie, coque, avaries conservées),
       l'équipage répare, et un nouveau convoi est signalé. Bouton <b>⚓ Rentrer à la base</b> (carte) pour clore la patrouille.
@@ -2376,7 +2571,7 @@ function showBrief(){
       <span id="resetCar" style="font-size:10px;color:var(--txt-dim);cursor:pointer;text-decoration:underline">réinitialiser la carrière</span>
     </div>
     <div id="sndStat" style="text-align:center;margin-top:4px;font-size:10px;color:var(--txt-dim)"></div>
-    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v35</div>
+    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v40</div>
     ${COMMON_HINT}`;
   updateSndStat();
   const list=card.querySelector("#scenList");
