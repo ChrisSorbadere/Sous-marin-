@@ -517,6 +517,26 @@ function radioReport(){
 
 /* ---------- passive sonar (hydrophone) — bearings only ---------- */
 let hydroT=0;
+function updateAllies(dt){
+  for(const a of (G.allies||[])){
+    // shadow the nearest live merchant, then loose a torpedo now and then
+    let tgt=null,bd=1e9;
+    for(const c of G.contacts){ if(c.alive&&c.type==="cargo"){ const d=dist(a.x,a.y,c.x,c.y); if(d<bd){bd=d;tgt=c;} } }
+    if(!tgt){ a.hdg=norm(a.hdg+0.02*dt); a.x+=Math.cos(a.hdg)*a.spd*KN*dt; a.y+=Math.sin(a.hdg)*a.spd*KN*dt; continue; }
+    const want=angTo(a.x,a.y,tgt.x,tgt.y);
+    a.hdg=norm(a.hdg+clamp(norm(want-a.hdg),-0.12*dt,0.12*dt));
+    const hold = bd<1500;                            // keep attack distance
+    a.x+=Math.cos(a.hdg)*(hold?a.spd*0.4:a.spd)*KN*dt;
+    a.y+=Math.sin(a.hdg)*(hold?a.spd*0.4:a.spd)*KN*dt;
+    a.torpT-=dt;
+    if(a.torpT<=0 && bd<2400){
+      a.torpT=45+Math.random()*45;
+      G.torps.push({x:a.x,y:a.y,hdg:angTo(a.x,a.y,tgt.x,tgt.y),run:0,dead:false,
+        fault:Math.random()<0.12?"dud":null,premAt:9e9,ally:true});
+      say("U-"+a.num+" attaque !","cmd");
+    }
+  }
+}
 function updateHydrophone(dt){
   hydroT-=dt; if(hydroT>0) return; hydroT=0.5;
   G.sound=[];
@@ -565,6 +585,9 @@ const SCENARIOS=[
   {id:"atlantic", name:"Convoi de l'Atlantique",
    line:"5 Liberty ships · 2 escortes · aviation — coulez-en 3.",
    merchants:5, escorts:2, air:true, need:3, coast:0.45},
+  {id:"meute", name:"Meute (Rudeltaktik)",
+   line:"6 cargos · 2 escortes · 2 U-Boots alliés — coulez-en 4 ensemble.",
+   merchants:6, escorts:2, air:false, need:4, coast:0.3, pack:2},
   {id:"duel", name:"Duel au mort",
    line:"Vous contre un destroyer tenace. Coulez-le ou disparaissez.",
    merchants:0, escorts:1, air:false, need:0, coast:0.25, duel:true},
@@ -642,6 +665,13 @@ function spawnConvoy(scen){
     G.contacts.push({type:"escort", x:clamp(cxc+ox,60,WORLD-60), y:clamp(cyc+oy,60,WORLD-60),
       hdg:course, spd:6, alive:true, state:"patrol", fixT:0, dcT:0, lkx:0, lky:0, px:0, py:0, hp:6, tons:1300});
   }
+  G.allies=[];
+  for(let a=0;a<(scen.pack||0);a++){
+    const side=(a%2?1:-1);
+    G.allies.push({x:clamp(cxc+Math.cos(beam)*side*2200,80,WORLD-80),
+                   y:clamp(cyc+Math.sin(beam)*side*2200,80,WORLD-80),
+                   hdg:course, spd:5.5, torpT:35+Math.random()*40, num:112+a*23});
+  }
 }
 /* ---------- hazards : minefields near coasts ---------- */
 function spawnHazards(scen){
@@ -699,6 +729,7 @@ function updatePlanes(dt){
     p.x+=Math.cos(p.hdg)*p.spd*dt; p.y+=Math.sin(p.hdg)*p.spd*dt;
   }
   G.planes=G.planes.filter(p=>p.x>-400&&p.x<WORLD+400&&p.y>-400&&p.y<WORLD+400);
+  if(!G.planes.length) saidOnce.metox=0;
 }
 
 /* ---------- messages ---------- */
@@ -1160,7 +1191,10 @@ function step(dt){
       if(dist(t.x,t.y,c.x,c.y)<80){
         t.dead=true;
         if(t.fault==="dud"){ say("Torpille au but — RATÉ ! Percuteur défectueux.","alarm"); break; }
-        G.hits++; sinkShip(c);
+        if(t.ally){ sinkAllied(c); break; }
+        G.hits++;
+        if(t.run>(G.longestHit||0)) G.longestHit=Math.round(t.run);
+        sinkShip(c);
         break;
       }
     }
@@ -1186,6 +1220,7 @@ function step(dt){
     }
   }
   updatePlanes(dt);
+  updateAllies(dt);
   updateHydrophone(dt); hydroAudio();
 
   // mines : moored mid-water — contact while shallow enough
@@ -1238,10 +1273,9 @@ function step(dt){
   // ---- detection accumulation (from living escorts) ----
   const light=todInfo(G.env.clock).light;
   let detRate=-1.2; // passive decay baseline
-  let nearestEnemy=1e9;
   for(const c of G.contacts){
     if(!c.alive||c.type!=="escort") continue;
-    const dM=dist(s.x,s.y,c.x,c.y); nearestEnemy=Math.min(nearestEnemy,dM);
+    const dM=dist(s.x,s.y,c.x,c.y);
     const near=clamp(1-dM/2600,0,1);
     if(near<=0) continue;
     // noise floor is dominated by speed; rigging for silent running cuts it drastically
@@ -1362,7 +1396,7 @@ function avoidHazards(c,dt){
     c.hdg=norm(c.hdg + clamp(norm(away-c.hdg),-0.7*dt,0.7*dt)); }
 }
 function dropCharges(c){
-  boom();
+  splashSfx(); setTimeout(boom,450);               // splash first, detonation follows
   const s=G.sub;
   const dM=dist(c.x,c.y,s.x,s.y);
   G.booms.push({x:c.x,y:c.y,life:.5,r:1});
@@ -1370,9 +1404,8 @@ function dropCharges(c){
   const prox=clamp(1-dM/360,0,1);
   const depthFactor=clamp(1-s.depth/140,0.15,1);   // shallow = worse
   const dmg=prox*depthFactor*42;
-  splashSfx();
   if(dmg>2){
-    s.hull-=dmg;
+    s.hull-=dmg; G.chargesTaken=(G.chargesTaken||0)+1;
     vibrate(clamp(Math.round(dmg*4),40,300)); if(dmg>18) creak();
     say("Grenades sous-marines ! Secousse violente !","alarm");
     // chance of incident
@@ -1393,6 +1426,14 @@ function logSink(label,tons,x,y){
 function creditTons(tons){
   G.patrolTons += tons;
   const car=loadCareer(); car.tonnage += tons; saveCareer(car);
+}
+function sinkAllied(c){
+  c.alive=false; surfBoom(); 
+  G.explosions.push({x:c.x,y:c.y,life:2.6,max:2.6}); G.wrecks.push({x:c.x,y:c.y,life:7});
+  if(c.type==="cargo"){ G.merchSunk++; G.det=clamp(G.det-8,0,100);   // escorts turn away
+    say("La meute frappe ! "+shipLabel(c)+" torpillé par un U-Boot allié ("+G.merchSunk+"/"+G.need+").","cmd");
+    if(G.merchSunk>=G.need) disperseConvoy(true);
+  } else say("Un U-Boot allié a coulé une escorte !","cmd");
 }
 function shipLabel(c){ return c.type==="escort" ? "Escorte" : (c.kind==="tanker" ? "Pétrolier" : "Cargo"); }
 function sinkShip(c){
@@ -1759,6 +1800,17 @@ function drawMap(){
     cx.restore();
     if(atk){ cx.strokeStyle="rgba(255,122,74,.5)"; cx.lineWidth=1*DPR;
       cx.beginPath(); cx.arc(px,py,12*DPR,0,TAU); cx.stroke(); }
+  }
+
+  // allied wolfpack boats
+  for(const a of (G.allies||[])){
+    const px=X(a.x),py=Y(a.y);
+    cx.save(); cx.translate(px,py); cx.rotate(a.hdg);
+    cx.fillStyle="rgba(150,180,190,.85)";
+    cx.beginPath(); cx.moveTo(9*DPR,0); cx.lineTo(-6*DPR,-4*DPR); cx.lineTo(-6*DPR,4*DPR); cx.closePath(); cx.fill();
+    cx.restore();
+    cx.fillStyle="rgba(150,180,190,.75)"; cx.font=`${8*DPR}px monospace`; cx.textAlign="center";
+    cx.fillText("U-"+a.num,px,py-8*DPR);
   }
 
   // own sub
@@ -2176,7 +2228,11 @@ function loop(ts){
 const PKEY="uboot_patrol";
 function savePatrol(){
   if(!G||!G.running||G.over) return;
-  try{ localStorage.setItem(PKEY, JSON.stringify(G)); }catch(e){}
+  try{
+    const ld=G.lastDrawn; G.lastDrawn=null;        // transient render data: don't serialize
+    localStorage.setItem(PKEY, JSON.stringify(G));
+    G.lastDrawn=ld;
+  }catch(e){}
 }
 function loadPatrol(){ try{ return JSON.parse(localStorage.getItem(PKEY)); }catch(e){ return null; } }
 function clearPatrol(){ try{ localStorage.removeItem(PKEY); }catch(e){} }
@@ -2190,6 +2246,8 @@ function resumePatrol(){
   if(G.gunT==null) G.gunT=0;
   if(G.sub.air==null) G.sub.air=100;
   if(G.sub.hydro==null) G.sub.hydro=0;
+  if(!G.allies) G.allies=[];
+  for(const t of G.torps) t.homing=null;           // homing refs don't survive serialization
   G.sub.tdc={on:false,tgt:null,valid:false,gyro:0,brg:0,rng:0,spd:0,crs:0}; // relink safety
   saidOnceReset(); ovl.classList.add("hide"); resize(); updateFireBtn(); syncSpeedBtns();
   say("Patrouille reprise.","cmd");
@@ -2228,7 +2286,9 @@ const UPG=[
 function loadUpg(){ try{ return JSON.parse(localStorage.getItem("uboot_upg"))||{owned:[],spent:0}; }catch(e){ return {owned:[],spent:0}; } }
 function saveUpg(u){ try{ localStorage.setItem("uboot_upg",JSON.stringify(u)); }catch(e){} }
 function hasUpg(id){ return loadUpg().owned.indexOf(id)>=0; }
-function loadCareer(){ try{ return JSON.parse(localStorage.getItem("uboot_career"))||{patrols:0,tonnage:0}; }catch(e){ return {patrols:0,tonnage:0}; } }
+function loadCareer(){ try{ const c=JSON.parse(localStorage.getItem("uboot_career"))||{};
+  return {patrols:c.patrols||0,tonnage:c.tonnage||0,longestHit:c.longestHit||0,charges:c.charges||0,bestPatrol:c.bestPatrol||0}; }
+  catch(e){ return {patrols:0,tonnage:0,longestHit:0,charges:0,bestPatrol:0}; } }
 function saveCareer(c){ try{ localStorage.setItem("uboot_career",JSON.stringify(c)); }catch(e){} }
 function loadKtb(){ try{ return JSON.parse(localStorage.getItem("uboot_ktb"))||[]; }catch(e){ return []; } }
 function saveKtb(a){ try{ localStorage.setItem("uboot_ktb",JSON.stringify(a.slice(-40))); }catch(e){} }
@@ -2257,7 +2317,7 @@ function showBrief(){
       <span id="resetCar" style="font-size:10px;color:var(--txt-dim);cursor:pointer;text-decoration:underline">réinitialiser la carrière</span>
     </div>
     <div id="sndStat" style="text-align:center;margin-top:4px;font-size:10px;color:var(--txt-dim)"></div>
-    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v31</div>
+    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v33</div>
     ${COMMON_HINT}`;
   updateSndStat();
   const list=card.querySelector("#scenList");
@@ -2319,6 +2379,8 @@ function showLogbook(){
   card.innerHTML=`
     <h1>Journal de bord</h1>
     <div class="sub">Carrière — ${car.tonnage.toLocaleString("fr")} t · grade ${rankOf(car.tonnage)}</div>
+    <div class="obj" style="text-align:left">Plus long tir au but : <b>${car.longestHit.toLocaleString("fr")} m</b> ·
+      Grenades essuyées : <b>${car.charges}</b> · Meilleure patrouille : <b>${car.bestPatrol.toLocaleString("fr")} t</b></div>
     <div class="ktb"><table><tr style="color:var(--txt-dim)"><td>Date</td><td>Patrouille</td><td style="text-align:right">Tonnage</td><td>Distinction</td></tr>${rows}</table></div>
     <button class="go" id="backBtn">Retour</button>`;
   $("#backBtn").onclick=showBrief;
@@ -2365,6 +2427,11 @@ $("#tutoOK").onclick=()=>{ tutoStep=-1; $("#tuto").classList.remove("on");
 function showEnd(won){
   clearPatrol();                                           // this patrol is over
   const car=loadCareer();                                  // tonnage & patrols already updated in-mission
+  if((G.longestHit||0)>car.longestHit) car.longestHit=G.longestHit;
+  car.charges+=(G.chargesTaken||0);
+  if(won && G.patrolTons>car.bestPatrol) car.bestPatrol=G.patrolTons;
+  saveCareer(car);
+  const upg=loadUpg(), credit=car.tonnage-upg.spent;
   const hull=Math.round(G.sub.hull);
   const medal=medalOf(G.patrolTons);
   const ktb=G.ktb||[];
@@ -2388,11 +2455,14 @@ function showEnd(won){
     <div class="ktb"><div class="ktbT">Journal de bord (Kriegstagebuch)</div>
       <table>${rows}</table></div>
     <div class="obj">Cette patrouille : <b>${G.patrolTons.toLocaleString("fr")} t</b> · ${G.convoyNum||1} convoi(s)<br>
-      Carrière : <b>${car.tonnage.toLocaleString("fr")} t</b> · ${car.patrols} patrouille(s) · grade <b>${rankOf(car.tonnage)}</b></div>
+      Carrière : <b>${car.tonnage.toLocaleString("fr")} t</b> · ${car.patrols} patrouille(s) · grade <b>${rankOf(car.tonnage)}</b><br>
+      Crédit chantier : <b>${credit.toLocaleString("fr")} t</b></div>
+    <button class="go" id="upgBtn" style="margin-bottom:8px">⚙ Chantier naval</button>
     <button class="go" id="reBtn" style="margin-bottom:8px">Recommencer — même scénario</button>
     <button class="go" id="goBtn">Nouvelle patrouille</button>`;
   ovl.classList.remove("hide");
   const sc=SCENARIOS.find(x=>x.id===G.scenario.id)||G.scenario;
+  $("#upgBtn").onclick=showUpgrades;
   $("#reBtn").onclick=()=>startMission(sc);
   $("#goBtn").onclick=()=>{ saidOnceReset(); showBrief(); };
 }
