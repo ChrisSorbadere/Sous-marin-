@@ -104,6 +104,10 @@
     border-radius:4px;padding:7px 11px;font:inherit;font-size:11px;font-weight:700;
     letter-spacing:.04em;text-transform:uppercase}
   #mapCtl button:active{background:rgba(30,24,12,.9)}
+  #hydroCtl{position:absolute;left:0;right:0;bottom:10px;display:flex;justify-content:center;gap:8px;z-index:6}
+  #hydroCtl button{background:rgba(10,20,18,.8);color:#78ebc8;border:1px solid #2a6b5c;
+    border-radius:4px;padding:8px 14px;font:inherit;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase}
+  #hydroCtl button:active{background:rgba(20,45,38,.9)}
   /* ---- periscope scope controls ---- */
   #scopeCtl{position:absolute;left:0;right:0;bottom:10px;display:flex;justify-content:center;
     gap:8px;pointer-events:none;z-index:6}
@@ -191,6 +195,10 @@
   </div>
   <div class="view" data-v="map"><canvas id="cvMap"></canvas>
     <div id="mapCtl"><button id="btnBase">⚓ Rentrer à la base</button></div>
+    <div id="hydroCtl">
+      <button id="hydroL">◄ Écoute</button>
+      <button id="hydroR">Écoute ►</button>
+    </div>
   </div>
   <div class="view" data-v="comms"><div id="comms"></div></div>
   <div id="log"></div>
@@ -323,7 +331,13 @@ const SND_FILES={
   torpille:  ["torpille.mp3","Torpille.mp3","sons/torpille.mp3"],
   diesel:    ["diesel.mp3","Diesel.mp3","sons/diesel.mp3"],
   electrique:["electrique.mp3","Electrique.mp3","sons/electrique.mp3"],
-  mer:       ["mer.mp3","Mer.mp3","Vent_Vagues_Long.mp3","sons/mer.mp3"]
+  mer:       ["mer.mp3","Mer.mp3","Vent_Vagues_Long.mp3","sons/mer.mp3"],
+  avion:     ["avion.mp3","Avion__long_.mp3","Avion (long).mp3"],
+  grenade:   ["grenade_eau.mp3","Grenade_entre_dans_l_eau.mp3"],
+  coque:     ["coque.mp3","Grincements_coque.mp3"],
+  explosurf: ["explosion_surface.mp3","Explosion_navire_surface.mp3"],
+  helices:   ["helices.mp3","Navires_Surface.mp3"],
+  torprun:   ["torprun.mp3","Torpille.mp3"]
 };
 const SND_TOTAL=Object.keys(SND_FILES).length;
 function updateSndStat(){
@@ -375,7 +389,7 @@ function startLoops(){
     const s=AC.createBufferSource(), g=AC.createGain();
     s.buffer=buf; s.loop=true; g.gain.value=0; s.connect(g).connect(dest()); s.start();
     return {gain:g.gain, rate:s.playbackRate}; };
-  loops={ diesel:mk(SND.diesel), electrique:mk(SND.electrique), mer:mk(SND.mer) };
+  loops={ diesel:mk(SND.diesel), electrique:mk(SND.electrique), mer:mk(SND.mer), helices:mk(SND.helices) };
 }
 addEventListener("pointerdown",()=>audio(),{once:true});
 function vibrate(p){ if(muted||!navigator.vibrate) return; try{ navigator.vibrate(p); }catch(e){} }
@@ -397,9 +411,13 @@ function tone(freq,vol,dur,type,slide){ const ac=audio(); if(!ac)return; const t
 function ping(freq,vol){ if(!play("sonar", vol!=null?Math.min(1,vol*4):.9, true)) tone(760,.14,.5,"sine",560); }
 function boom(){ if(!play("explosion",1,true)) tone(150,.6,.5,"sine",42); }
 function klaxon(){ if(!play("klaxon",.9,false)){ tone(430,.14,.32,"sawtooth"); setTimeout(()=>tone(320,.14,.4,"sawtooth"),330);} }
-function launchSfx(){ if(!play("torpille",.9,false)) tone(900,.12,.5,"sawtooth",300); }
+function launchSfx(){ if(!play("torpille",.9,false)) tone(900,.12,.5,"sawtooth",300); play("torprun",.5,false); }
+function planeSfx(){ play("avion",.7,false); }
+function splashSfx(){ play("grenade",.7,true); }
+function surfBoom(){ if(!play("explosurf",1,true)) boom(); }
 // hull groan — kept synthesized (no sample supplied)
 function creak(){
+  if(play('coque',.8,true)) return;
   const ac=audio(); if(!ac)return; const t=ac.currentTime;
   const n=Math.max(1,Math.floor(ac.sampleRate*.6)), buf=ac.createBuffer(1,n,ac.sampleRate), d=buf.getChannelData(0);
   for(let i=0;i<n;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/n,0.8);
@@ -426,7 +444,7 @@ function heartbeat(){
 function engineStop(){                       // menu / game over: fade every ambience loop out
   if(!AC||!loops) return; const tc=AC.currentTime;
   loops.diesel.gain.setTargetAtTime(0,tc,.4); loops.electrique.gain.setTargetAtTime(0,tc,.4);
-  loops.mer.gain.setTargetAtTime(0,tc,.6);
+  loops.mer.gain.setTargetAtTime(0,tc,.6); loops.helices.gain.setTargetAtTime(0,tc,.6);
 }
 function engineSet(vel,surf){
   const ac=audio(); if(!ac||!loops) return; const tc=ac.currentTime;
@@ -504,7 +522,7 @@ function updateHydrophone(dt){
   G.sound=[];
   const s=G.sub;
   if(s.depth<4){ return; }                       // surfaced: own wash drowns the hydrophone
-  const range=clamp(HYDRO_BASE - s.vel*520, 900, HYDRO_BASE);
+  const range=clamp((HYDRO_BASE - s.vel*520)*(1-G.env.weather.sea*0.45), 700, HYDRO_BASE);
   for(const c of G.contacts){
     if(!c.alive) continue;
     const dM=dist(s.x,s.y,c.x,c.y);
@@ -514,6 +532,26 @@ function updateHydrophone(dt){
     const err=(dM/range)*0.14 + G.env.weather.sea*0.05;
     G.sound.push({b:angTo(s.x,s.y,c.x,c.y)+c.berr*err*6, strong:dM<2300, type:c.type});
   }
+}
+// audible hydrophone: propeller beats swell as a contact nears the LISTENING bearing
+function hydroAudio(){
+  if(!loops||!loops.helices.rate) return;
+  const s=G.sub, ac=AC;
+  const listening = s.depth>=4 && s.vel<3.2;      // must be submerged and fairly quiet to listen
+  let bestGain=0, bestRate=0.85;
+  if(listening){
+    const range=clamp((HYDRO_BASE - s.vel*520)*(1-G.env.weather.sea*0.45), 700, HYDRO_BASE);
+    for(const c of G.contacts){ if(!c.alive) continue;
+      const dM=dist(s.x,s.y,c.x,c.y); if(dM>range) continue;
+      const align=Math.abs(norm(angTo(s.x,s.y,c.x,c.y)-s.hydro));   // 0 = dead on the listening bearing
+      const dir=clamp(1-align/0.9,0,1);                              // narrow beam
+      const prox=clamp(1-dM/range,0,1);
+      const g=dir*(0.12+prox*0.5);
+      if(g>bestGain){ bestGain=g; bestRate=0.75+prox*0.9; }          // closer → faster beats
+    }
+  }
+  loops.helices.gain.setTargetAtTime(bestGain, ac.currentTime, .25);
+  loops.helices.rate.setTargetAtTime(bestRate, ac.currentTime, .3);
 }
 
 /* ---------- scenarios ---------- */
@@ -541,10 +579,10 @@ function newGame(scen){
     t:0, over:false, won:false, running:false,
     sub:{ x:WORLD*0.5, y:WORLD*0.5, hdg:-Math.PI/2, rudder:0,
           spd:1, vel:0, depth:18, tDepth:18, pitch:0,
-          peri:0, periUp:false, silent:false, hull:100, air:100,
+          peri:0, periUp:false, silent:false, hull:100, air:100, hydro:0,
           ballast:50, leak:0, fire:0, fireT:0,
           tubes:[{loaded:true,rt:0},{loaded:true,rt:0},{loaded:true,rt:0},{loaded:true,rt:0}],
-          reserve:10, tdc:{on:false,tgt:null,valid:false,gyro:0,brg:0,rng:0,spd:0,crs:0},
+          reserve:hasUpg('typeIX')?16:10, tdc:{on:false,tgt:null,valid:false,gyro:0,brg:0,rng:0,spd:0,crs:0},
           batt:100, scopeRel:0, scope:-Math.PI/2 },
     contacts:[], torps:[], booms:[], planes:[], wrecks:[], pings:[], mines:[], decoys:[],
     shells:60, bolds:4, gunT:0,
@@ -630,6 +668,7 @@ function spawnPlane(){
   const hdg=angTo(x,y, s.x+(Math.random()-.5)*1600, s.y+(Math.random()-.5)*1600);
   G.planes.push({x,y,hdg,spd:28,state:"patrol",dropT:0,tx:0,ty:0});
   if(G.sub.depth<6) say("Veille : avion ennemi en vue !","alarm");
+  else if(hasUpg('metox')) sayOnce("metox","Metox : émission radar détectée — un avion approche.","alarm");
 }
 function planeAttack(p){
   const s=G.sub; boom(); flashScreen(); vibrate([0,160,50,110]);
@@ -649,7 +688,7 @@ function updatePlanes(dt){
       // spotting range depends on depth: easy on the surface, harder at periscope depth, none if deep
       const spotR = s.depth<6 ? 1300 : s.depth<14 ? 650 : 0;
       if(spotR>0 && dist(p.x,p.y,s.x,s.y)<spotR){
-        p.state="attack"; p.tx=s.x; p.ty=s.y;
+        p.state="attack"; p.tx=s.x; p.ty=s.y; planeSfx();
         sayOnce("air","Avion droit sur nous — plongée d'urgence !","alarm"); }
     } else if(p.state==="attack"){
       if(s.depth<16){ p.tx=s.x; p.ty=s.y; }        // keeps track only while shallow
@@ -756,6 +795,15 @@ const MAPV={z:1, cx:WORLD/2, cy:WORLD/2, toWorld:null};
   };
   el.addEventListener("pointerup",up); el.addEventListener("pointercancel",up);
 }
+(function(){
+  const step=d=>{ if(G&&G.sub) G.sub.hydro=norm(G.sub.hydro + d); };
+  [["#hydroL",-0.09],["#hydroR",0.09]].forEach(([sel,d])=>{
+    const b=$(sel); let iv=null;
+    const stop=()=>{ if(iv){clearInterval(iv);iv=null;} };
+    b.addEventListener("pointerdown",e=>{ e.preventDefault(); step(d); iv=setInterval(()=>step(d),90); });
+    ["pointerup","pointerleave","pointercancel"].forEach(ev=>b.addEventListener(ev,stop));
+  });
+})();
 $("#btnBase").onclick=()=>{
   if(!G||G.over) return;
   if(G.phase==="attack" && G.contacts.some(c=>c.type==="cargo"&&c.alive)){
@@ -888,6 +936,17 @@ function fireOne(){
   say("Torpille lancée !"+(s.tdc.on&&s.tdc.valid?" (solution TDC)":""),"alarm"); launchSfx();
   updateFireBtn();
 }
+function fireT5(){
+  const s=G.sub;
+  if(!(s.periUp && s.peri>0.7 && s.depth<=PERISCOPE_DEPTH) && s.depth>=4){ say("T5 : périscope ou surface requis.","cmd"); return; }
+  if(loadedTubes()<1){ say("Aucun tube paré.","cmd"); return; }
+  let tgt=null,bd=1e9; for(const c of G.contacts){ if(c.alive&&c.type==="escort"){ const d=dist(s.x,s.y,c.x,c.y); if(d<bd){bd=d;tgt=c;} } }
+  if(!tgt){ say("T5 : aucune escorte à poursuivre.","cmd"); return; }
+  const ti=s.tubes.findIndex(t=>t.loaded); s.tubes[ti].loaded=false; s.tubes[ti].rt=24;
+  G.fired++; s.detSpike=(s.detSpike||0)+6;
+  G.torps.push({x:s.x+Math.cos(s.hdg)*30,y:s.y+Math.sin(s.hdg)*30,hdg:s.hdg,run:0,dead:false,fault:null,premAt:9e9,homing:tgt});
+  say("Torpille acoustique T5 lancée — elle chasse l'escorte !","alarm"); launchSfx();
+}
 function fireSalvo(){
   audio(); const s=G.sub;
   if(s.depth>20){ say("Lancement impossible : remonte sous 20 m.","cmd"); return; }
@@ -928,7 +987,7 @@ function updateTDC(dt){
   } else { t.valid=false; }
 }
 $("#bFire").onclick=fireOne;
-$("#bSalvo").onclick=fireSalvo;
+$("#bSalvo").onclick=()=>{ if(hasUpg('t5')) fireT5(); else fireSalvo(); };
 function updateFireBtn(){
   const rem=torpRemaining(), any=loadedTubes()>0;
   $("#bFire").disabled=!any;
@@ -1056,8 +1115,10 @@ function step(dt){
 
   // leak: takes on water -> slow sink + hull stress; auto-stabilises slowly if shallow & slow
   // ---- air / CO2 : the boat holds ~10 real minutes of air submerged ----
+  const snork = hasUpg('schnorchel') && s.depth<=PERISCOPE_DEPTH && s.depth>=4 && G.det<40;
+  if(snork){ s.batt=clamp(s.batt+0.25*dt,0,100); s.air=clamp(s.air+3*dt,0,100); }
   if(s.depth>=4){
-    s.air=clamp(s.air - dt*(0.042 + s.fire*0.10),0,100);
+    s.air=clamp(s.air - (snork?0:dt*(0.042 + s.fire*0.10)),0,100);
     if(s.air<40) sayOnce("air40","L'air se vicie — l'équipage respire mal. Il faudra ventiler.","cmd");
     if(s.air<15) sayOnce("air15","CO₂ critique ! Faites surface pour ventiler !","alarm");
     if(s.air<=0){ s.hull-=dt*2.5; sayOnce("air0","L'équipage suffoque !","alarm"); }
@@ -1085,6 +1146,10 @@ function step(dt){
   // ---- torpedoes ----
   for(const t of G.torps){
     t.run+=TORP_SPD*dt;
+    if(t.homing && t.homing.alive && t.run<TORP_RANGE){    // T5 acoustic homing
+      const want=angTo(t.x,t.y,t.homing.x,t.homing.y);
+      t.hdg=norm(t.hdg+clamp(norm(want-t.hdg),-1.6*dt,1.6*dt));
+    }
     t.x+=Math.cos(t.hdg)*TORP_SPD*dt; t.y+=Math.sin(t.hdg)*TORP_SPD*dt;
     if(t.fault==="premature" && t.run>t.premAt){     // magnetic-pistol premature
       t.dead=true; boom(); G.explosions.push({x:t.x,y:t.y,life:1.4,max:1.4});
@@ -1121,7 +1186,7 @@ function step(dt){
     }
   }
   updatePlanes(dt);
-  updateHydrophone(dt);
+  updateHydrophone(dt); hydroAudio();
 
   // mines : moored mid-water — contact while shallow enough
   if(s.depth<70){
@@ -1198,15 +1263,7 @@ function step(dt){
   engineSet(s.vel, s.depth<4);
   if(G.det>=72){ G.hbT=(G.hbT||0)-dt; if(G.hbT<=0){ heartbeat(); G.hbT=clamp(1.5-G.det*0.007,0.5,1.4); } }
 
-  // ---- sonar ping cadence : always leave silence between pings so they never blur into one ----
-  G.pingT-=dt;
-  if(G.pingT<=0 && nearestEnemy<3000){
-    const f=clamp(1-nearestEnemy/3000,0,1);
-    const dur=(SND.sonar&&SND.sonar.duration)||1.4;   // let the sample finish first
-    const silence=0.3+(1-f)*2.3;                       // closer → shorter silence, but never zero
-    G.pingT = dur + silence;
-    ping(560+f*420, .07+f*.12);
-  }
+  // (no ambient sonar: the U-boat has no ASDIC — only the escorts ping, and only while hunting)
 
   // ---- depth charges damage ----
   G.booms=G.booms.filter(b=>{ b.life-=dt; return b.life>0; });
@@ -1253,7 +1310,7 @@ function escortAI(c,dt){
       } else {
         const layer = s.depth>130 ? 0.3 : (s.depth<14?0.6:1);   // deep dive (below layer) or surface duct defeats it
         const stillness = 0.45+0.55*clamp(s.vel/3,0,1);          // a stopped boat is harder to pick out from the seabed
-        const ret = clamp(1-dM/2400,0,1)*layer*stillness;
+        const ret = clamp(1-dM/2400,0,1)*layer*stillness*(1-G.env.weather.sea*0.6);
         if(ret>0.25){ c.lkx=s.x+(Math.random()-.5)*120; c.lky=s.y+(Math.random()-.5)*120; c.fixT=4;
           G.det=clamp(G.det+ret*22,0,100); }
       }
@@ -1275,7 +1332,7 @@ function escortAI(c,dt){
         const dec=activeDecoy();
         if(dec && dist(c.x,c.y,dec.x,dec.y)<2400){ c.lkx=dec.x; c.lky=dec.y; }
         else { const layer=s.depth>130?0.3:(s.depth<14?0.6:1), still=0.45+0.55*clamp(s.vel/3,0,1);
-          const ret=clamp(1-dM/2400,0,1)*layer*still;
+          const ret=clamp(1-dM/2400,0,1)*layer*still*(1-G.env.weather.sea*0.6);
           if(ret>0.30){ G.det=clamp(G.det+ret*16,0,100); c.lkx=s.x; c.lky=s.y; } } }
     } else if(c.fixT<=0){
       const merch=G.contacts.filter(k=>k.type==="cargo"&&k.alive);
@@ -1313,6 +1370,7 @@ function dropCharges(c){
   const prox=clamp(1-dM/360,0,1);
   const depthFactor=clamp(1-s.depth/140,0.15,1);   // shallow = worse
   const dmg=prox*depthFactor*42;
+  splashSfx();
   if(dmg>2){
     s.hull-=dmg;
     vibrate(clamp(Math.round(dmg*4),40,300)); if(dmg>18) creak();
@@ -1338,7 +1396,7 @@ function creditTons(tons){
 }
 function shipLabel(c){ return c.type==="escort" ? "Escorte" : (c.kind==="tanker" ? "Pétrolier" : "Cargo"); }
 function sinkShip(c){
-  c.alive=false; boom(); flashScreen(); vibrate([0,140,40,90]);
+  c.alive=false; surfBoom(); flashScreen(); vibrate([0,140,40,90]);
   const big = c.kind==="tanker";
   if(big){ setTimeout(boom,350); }                          // fuel goes up in a second blast
   G.explosions.push({x:c.x,y:c.y,life:big?4:2.6,max:big?4:2.6});
@@ -1625,6 +1683,17 @@ function drawMap(){
     cx.lineTo(X(it.x)+Math.cos(it.course)*22*DPR, Y(it.y)+Math.sin(it.course)*22*DPR); cx.stroke();
     cx.fillStyle=`rgba(232,185,74,${a*0.8})`; cx.font=`${8.5*DPR}px monospace`; cx.textAlign="center";
     cx.fillText("contact signalé", X(it.x), Y(it.y)-it.r*sc-4*DPR);
+  }
+
+  // --- hydrophone listening needle (rotatable, cyan) ---
+  if(s.depth>=4){
+    const L=Math.min(w,h)*0.42;
+    cx.strokeStyle="rgba(120,235,200,.85)"; cx.lineWidth=2*DPR;
+    cx.beginPath(); cx.moveTo(X(s.x),Y(s.y));
+    cx.lineTo(X(s.x)+Math.cos(s.hydro)*L, Y(s.y)+Math.sin(s.hydro)*L); cx.stroke();
+    cx.fillStyle="rgba(120,235,200,.9)"; cx.font=`${9*DPR}px monospace`; cx.textAlign="left";
+    const brg=Math.round((s.hydro*R2D+90+360)%360);
+    cx.fillText("écoute "+String(brg).padStart(3,"0")+"°", X(s.x)+Math.cos(s.hydro)*L+6*DPR, Y(s.y)+Math.sin(s.hydro)*L);
   }
 
   // --- hydrophone bearings (direction only, no range) ---
@@ -2120,6 +2189,7 @@ function resumePatrol(){
   if(!G.decoys) G.decoys=[];
   if(G.gunT==null) G.gunT=0;
   if(G.sub.air==null) G.sub.air=100;
+  if(G.sub.hydro==null) G.sub.hydro=0;
   G.sub.tdc={on:false,tgt:null,valid:false,gyro:0,brg:0,rng:0,spd:0,crs:0}; // relink safety
   saidOnceReset(); ovl.classList.add("hide"); resize(); updateFireBtn(); syncSpeedBtns();
   say("Patrouille reprise.","cmd");
@@ -2141,7 +2211,7 @@ const COMMON_HINT=`
       <b>Asdic</b> : en chasse, l'escorte « pingue » — plongez sous la couche thermique (~130 m) pour brouiller son écho.
       <b>Batterie</b> : les moteurs électriques se vident en plongée ; faites surface aux diesels (la nuit) pour recharger.
       <b>Gare</b> : torpilles parfois défectueuses, champs de mines (zone rouge) et hauts-fonds (récifs pointillés).
-      <b>Air</b> : en plongée le CO₂ monte (~10 min d'air) — faites surface pour ventiler. <b>Avaries</b> : aux Postes, choisissez la priorité de l'équipe de réparation. <b>Silence total</b> : bouton Silence + machine à Stop = moteurs coupés, équipage figé. Vous devenez quasi introuvable
+      <b>Hydrophone</b> (Carte) : oriente l'écoute avec ◄/► — le battement d'hélices enfle quand un navire est sur le relèvement. <b>Chantier</b> (menu) : dépense ton tonnage en améliorations. <b>Air</b> : en plongée le CO₂ monte (~10 min d'air) — faites surface pour ventiler. <b>Avaries</b> : aux Postes, choisissez la priorité de l'équipe de réparation. <b>Silence total</b> : bouton Silence + machine à Stop = moteurs coupés, équipage figé. Vous devenez quasi introuvable
       (mais immobile) ; tirer ou souffler les ballasts rompt le silence. Idéal pour semer un destroyer à l'Asdic.
       <b>Patrouille continue</b> : un convoi coulé/dispersé, le sous-marin reste en mer (batterie, coque, avaries conservées),
       l'équipage répare, et un nouveau convoi est signalé. Bouton <b>⚓ Rentrer à la base</b> (carte) pour clore la patrouille.
@@ -2149,6 +2219,15 @@ const COMMON_HINT=`
       La patrouille est <b>sauvegardée automatiquement</b> : bouton « ▶ Reprendre » au menu ; <b>journal de bord</b> et médailles y sont consultables.
       <b>Clavier</b> : ←/→ barre · ↑/↓ profondeur · , / . scope · Espace feu · T salve · L TDC · P périscope.
     </div>`;
+const UPG=[
+  {id:"typeIX", name:"Type IX (grande autonomie)", cost:30000, desc:"+6 torpilles de réserve, +20 % d'air."},
+  {id:"schnorchel", name:"Schnorchel", cost:45000, desc:"Recharge batterie et ventile l'air à l'immersion périscopique."},
+  {id:"metox", name:"Détecteur Metox", cost:20000, desc:"Alerte quand un avion arrive (radar ennemi) — sans position."},
+  {id:"t5", name:"Torpille acoustique T5", cost:60000, desc:"Bouton Salve = torpille qui poursuit l'escorte la plus proche."},
+];
+function loadUpg(){ try{ return JSON.parse(localStorage.getItem("uboot_upg"))||{owned:[],spent:0}; }catch(e){ return {owned:[],spent:0}; } }
+function saveUpg(u){ try{ localStorage.setItem("uboot_upg",JSON.stringify(u)); }catch(e){} }
+function hasUpg(id){ return loadUpg().owned.indexOf(id)>=0; }
 function loadCareer(){ try{ return JSON.parse(localStorage.getItem("uboot_career"))||{patrols:0,tonnage:0}; }catch(e){ return {patrols:0,tonnage:0}; } }
 function saveCareer(c){ try{ localStorage.setItem("uboot_career",JSON.stringify(c)); }catch(e){} }
 function loadKtb(){ try{ return JSON.parse(localStorage.getItem("uboot_ktb"))||[]; }catch(e){ return []; } }
@@ -2173,10 +2252,12 @@ function showBrief(){
     <div style="text-align:center;margin-top:6px">
       <span id="showKtb" style="font-size:11px;color:var(--phos);cursor:pointer;text-decoration:underline">journal de bord</span>
       <span style="color:var(--txt-dim)"> · </span>
+      <span id="showUpg" style="font-size:11px;color:var(--amber);cursor:pointer;text-decoration:underline">chantier</span>
+      <span style="color:var(--txt-dim)"> · </span>
       <span id="resetCar" style="font-size:10px;color:var(--txt-dim);cursor:pointer;text-decoration:underline">réinitialiser la carrière</span>
     </div>
     <div id="sndStat" style="text-align:center;margin-top:4px;font-size:10px;color:var(--txt-dim)"></div>
-    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v29</div>
+    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v31</div>
     ${COMMON_HINT}`;
   updateSndStat();
   const list=card.querySelector("#scenList");
@@ -2198,9 +2279,33 @@ function showBrief(){
     b.onclick=()=>startMission(sc);
     list.appendChild(b);
   });
-  card.querySelector("#resetCar").onclick=()=>{ saveCareer({patrols:0,tonnage:0}); saveKtb([]); showBrief(); };
+  card.querySelector("#resetCar").onclick=()=>{ saveCareer({patrols:0,tonnage:0}); saveKtb([]); saveUpg({owned:[],spent:0}); showBrief(); };
   card.querySelector("#showKtb").onclick=showLogbook;
+  card.querySelector("#showUpg").onclick=showUpgrades;
   ovl.classList.remove("hide");
+}
+function showUpgrades(){
+  const car=loadCareer(), u=loadUpg(), avail=car.tonnage-u.spent;
+  const rows=UPG.map(x=>{
+    const owned=u.owned.indexOf(x.id)>=0;
+    const can=!owned && avail>=x.cost;
+    const btn = owned ? `<span style="color:var(--phos)">✓ installé</span>`
+      : `<button class="go" style="width:auto;padding:6px 12px;font-size:12px;${can?'':'opacity:.4'}" data-buy="${x.id}">${x.cost.toLocaleString("fr")} t</button>`;
+    return `<div class="ln" style="align-items:flex-start;padding:7px 0;border-bottom:1px solid rgba(120,150,120,.14)">
+      <b style="color:var(--txt);max-width:60%">${x.name}<br><span style="color:var(--txt-dim);font-size:10.5px">${x.desc}</span></b>
+      <span>${btn}</span></div>`;
+  }).join("");
+  card.innerHTML=`
+    <h1>Chantier naval</h1>
+    <div class="sub">Crédit : ${avail.toLocaleString("fr")} t (tonnage de carrière)</div>
+    <div style="margin:4px 0 14px">${rows}</div>
+    <button class="go" id="backBtn">Retour</button>`;
+  card.querySelectorAll("[data-buy]").forEach(b=>b.onclick=()=>{
+    const uu=loadUpg(), x=UPG.find(z=>z.id===b.dataset.buy), av=loadCareer().tonnage-uu.spent;
+    if(uu.owned.indexOf(x.id)>=0||av<x.cost) return;
+    uu.owned.push(x.id); uu.spent+=x.cost; saveUpg(uu); showUpgrades();
+  });
+  $("#backBtn").onclick=showBrief;
 }
 function showLogbook(){
   const arch=loadKtb().slice().reverse();
