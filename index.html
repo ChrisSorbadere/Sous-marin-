@@ -1369,10 +1369,16 @@ function step(dt){
       } else if(c.sinking){ /* dead in the water */ }
       else c.hdg=norm(c.hdg+clamp(norm(convoyHdg-c.hdg),-0.4*dt,0.4*dt));   // steer onto the zigzag leg
       avoidHazards(c,dt);
+      if(!c.withdraw){                       // stay in the sector while the fight is on
+        const cxm=WORLD/2, edge=Math.min(c.x,WORLD-c.x,c.y,WORLD-c.y);
+        if(edge<350){ const inw=angTo(c.x,c.y,cxm,cxm);
+          c.hdg=norm(c.hdg+clamp(norm(inw-c.hdg),-0.5*dt,0.5*dt)); }
+      }
       const spdEff = c.sinking?0.4 : (c.evadeT>0?7.2:c.spd);            // flank speed under attack
       const cnx=c.x+Math.cos(c.hdg)*spdEff*KN*dt, cny=c.y+Math.sin(c.hdg)*spdEff*KN*dt;
       if(!landAt(cnx,cny)){ c.x=cnx; c.y=cny; } else { c.hdg=norm(c.hdg+0.5); }
-      if(c.x<60||c.x>WORLD-60||c.y<60||c.y>WORLD-60){ c.fled=true; c.alive=false; G.escaped++; }
+      if(c.x<60||c.x>WORLD-60||c.y<60||c.y>WORLD-60){ c.fled=true; c.alive=false; G.escaped++;
+        if(!c.withdraw) say("Un "+shipLabel(c).toLowerCase()+" s'échappe hors du secteur.","cmd"); }
     } else {
       escortAI(c,dt);
     }
@@ -1555,6 +1561,11 @@ function escortAI(c,dt){
       else { const layer=s.depth>130?0.3:(s.depth<14?0.6:1), still=0.45+0.55*clamp(s.vel/3,0,1);
         const ret=clamp(1-dM/2400,0,1)*layer*still*(1-G.env.weather.sea*0.6);
         if(ret>0.28){ G.det=clamp(G.det+ret*20,0,100); c.lkx=s.x; c.lky=s.y; c.fixT=0; } } }
+  } else if(c.withdraw){
+    const ex=c.x<WORLD/2?-100:WORLD+100, ey=c.y<WORLD/2?-100:WORLD+100;
+    const toX=Math.min(c.x,WORLD-c.x)<Math.min(c.y,WORLD-c.y);
+    tx=toX?ex:c.x; ty=toX?c.y:ey; spd=12; turn=0.10;
+    if(c.x<70||c.x>WORLD-70||c.y<70||c.y>WORLD-70){ c.alive=false; }
   } else {
     detLockSaid=false;
     if(G.scenario.duel){
@@ -1722,6 +1733,13 @@ function onMerchantSunk(c,slow){
 function disperseConvoy(success){
   if(G.phase!=="attack") return;
   G.phase="transit"; G.nextConvoyT=45+Math.random()*40;
+  for(const c of G.contacts){                       // survivors run for the horizon, visibly
+    if(!c.alive||c.sinking) continue;
+    c.withdraw=true;
+    const ex = c.x<WORLD/2?40:WORLD-40, ey = c.y<WORLD/2?40:WORLD-40;
+    const toX = Math.min(c.x,WORLD-c.x)<Math.min(c.y,WORLD-c.y);
+    if(c.type==="cargo"){ c.evadeT=9999; c.evHdg = toX?angTo(c.x,c.y,ex,c.y):angTo(c.x,c.y,c.x,ey); }
+  }
   say(success ? "Convoi dispersé ! Reprise de patrouille — réparations en cours."
               : "Le convoi s'est échappé. On poursuit la patrouille.","cmd");
 }
@@ -2612,7 +2630,7 @@ function showBrief(){
       <span id="resetCar" style="font-size:10px;color:var(--txt-dim);cursor:pointer;text-decoration:underline">réinitialiser la carrière</span>
     </div>
     <div id="sndStat" style="text-align:center;margin-top:4px;font-size:10px;color:var(--txt-dim)"></div>
-    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v42</div>
+    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v43</div>
     ${COMMON_HINT}`;
   updateSndStat();
   const list=card.querySelector("#scenList");
