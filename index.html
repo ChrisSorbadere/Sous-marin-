@@ -849,7 +849,12 @@ function updatePlanes(dt){
       const spotR = s.depth<6 ? 1300 : s.depth<14 ? 650 : 0;
       if(spotR>0 && dist(p.x,p.y,s.x,s.y)<spotR){
         p.state="attack"; p.tx=s.x; p.ty=s.y; if(s.depth<6) planeSfx();
-        sayOnce("air","Avion droit sur nous — plongée d'urgence !","alarm"); }
+        sayOnce("air","Avion droit sur nous — plongée d'urgence !","alarm");
+        let alerted=false;
+        for(const e of G.contacts){ if(e.alive&&e.type==="escort"){
+          e.state="hunt"; e.lkx=s.x; e.lky=s.y; e.fixT=5; alerted=true; } }
+        if(alerted){ G.det=clamp(Math.max(G.det,60),0,100);
+          say("L'avion transmet notre position — les escortes accourent !","alarm"); } }
     } else if(p.state==="attack"){
       if(s.depth<16){ p.tx=s.x; p.ty=s.y; }        // keeps track only while shallow
       if(dist(p.x,p.y,p.tx,p.ty)<170 && p.dropT<=0){ planeAttack(p); p.dropT=3; p.state="leave"; saidOnce.air=0; }
@@ -1086,7 +1091,7 @@ function launchTorp(aim){
   const s=G.sub;
   const r=Math.random();
   const fault = r<0.05 ? "premature" : (r<0.14 ? "dud" : null);   // ~5% prématurée, ~9% raté
-  G.torps.push({x:s.x+Math.cos(aim)*30, y:s.y+Math.sin(aim)*30, hdg:aim, run:0,
+  G.torps.push({x:s.x+Math.cos(aim)*30, y:s.y+Math.sin(aim)*30, ox:s.x, oy:s.y, hdg:aim, run:0,
                 fault, premAt:500+Math.random()*1600});
   s.detSpike=(s.detSpike||0)+18; G.fired++;
 }
@@ -1113,7 +1118,7 @@ function fireT5(){
   if(!tgt){ say("T5 : aucune escorte à poursuivre.","cmd"); return; }
   const ti=s.tubes.findIndex(t=>t.loaded); s.tubes[ti].loaded=false; s.tubes[ti].rt=24;
   G.fired++; s.detSpike=(s.detSpike||0)+6;
-  G.torps.push({x:s.x+Math.cos(s.hdg)*30,y:s.y+Math.sin(s.hdg)*30,hdg:s.hdg,run:0,dead:false,fault:null,premAt:9e9,homing:tgt});
+  G.torps.push({x:s.x+Math.cos(s.hdg)*30,y:s.y+Math.sin(s.hdg)*30,ox:s.x,oy:s.y,hdg:s.hdg,run:0,dead:false,fault:null,premAt:9e9,homing:tgt});
   say("Torpille acoustique T5 lancée — elle chasse l'escorte !","alarm"); launchSfx();
 }
 function fireSalvo(){
@@ -1321,6 +1326,12 @@ function step(dt){
       t.hdg=norm(t.hdg+clamp(norm(want-t.hdg),-1.6*dt,1.6*dt));
     }
     t.x+=Math.cos(t.hdg)*TORP_SPD*dt; t.y+=Math.sin(t.hdg)*TORP_SPD*dt;
+    // lookouts may spot the wake (day/calm = likely; night/storm = rarely)
+    if(!t.ally && !t.spotted && t.run>260){
+      const light=todInfo(G.env.clock).light, sea=G.env.weather.sea;
+      const near=G.contacts.some(c=>c.alive && dist(t.x,t.y,c.x,c.y)<1300);
+      if(near && Math.random() < dt*0.55*light*(1-sea*0.6)){ t.spotted=true; torpedoSpotted(t); }
+    }
     if(t.fault==="premature" && t.run>t.premAt){     // magnetic-pistol premature
       t.dead=true; boom(); G.explosions.push({x:t.x,y:t.y,life:1.4,max:1.4});
       say("Torpille : explosion prématurée (amorce magnétique).","alarm"); continue;
@@ -1353,9 +1364,13 @@ function step(dt){
   for(const c of G.contacts){
     if(!c.alive) continue;
     if(c.type==="cargo"){
-      c.hdg=norm(c.hdg+clamp(norm(convoyHdg-c.hdg),-0.4*dt,0.4*dt));   // steer onto the zigzag leg
+      if(c.evadeT>0){ c.evadeT-=dt;
+        c.hdg=norm(c.hdg+clamp(norm(c.evHdg-c.hdg),-0.6*dt,0.6*dt));    // hard rudder — comb the tracks
+      } else if(c.sinking){ /* dead in the water */ }
+      else c.hdg=norm(c.hdg+clamp(norm(convoyHdg-c.hdg),-0.4*dt,0.4*dt));   // steer onto the zigzag leg
       avoidHazards(c,dt);
-      const cnx=c.x+Math.cos(c.hdg)*c.spd*KN*dt, cny=c.y+Math.sin(c.hdg)*c.spd*KN*dt;
+      const spdEff = c.sinking?0.4 : (c.evadeT>0?7.2:c.spd);            // flank speed under attack
+      const cnx=c.x+Math.cos(c.hdg)*spdEff*KN*dt, cny=c.y+Math.sin(c.hdg)*spdEff*KN*dt;
       if(!landAt(cnx,cny)){ c.x=cnx; c.y=cny; } else { c.hdg=norm(c.hdg+0.5); }
       if(c.x<60||c.x>WORLD-60||c.y<60||c.y>WORLD-60){ c.fled=true; c.alive=false; G.escaped++; }
     } else {
@@ -1500,7 +1515,7 @@ function escortAI(c,dt){
       ax=s.x+Math.cos(away)*850; ay=s.y+Math.sin(away)*850;
     }
     tx=clamp(ax,40,WORLD-40); ty=clamp(ay,40,WORLD-40);
-    spd=isKiller?12:9; turn=0.11;
+    spd = isKiller ? (dM>1600?18:15) : 10; turn=0.12;      // destroyers sprint, slow for the Asdic run
     const dM=dist(c.x,c.y,s.x,s.y);
     if(!isKiller && c.asdicT>1.8) c.asdicT=1.8;       // pointers ping twice as often
     // active Asdic: periodic ping; refines fix & spikes detection when in range & above the layer
@@ -1530,7 +1545,7 @@ function escortAI(c,dt){
       c.px=clamp((c.lkx||s.x)+Math.cos(ang)*leg,40,WORLD-40);
       c.py=clamp((c.lky||s.y)+Math.sin(ang)*leg,40,WORLD-40); c.fixT=6;
     }
-    tx=c.px; ty=c.py; spd=8; turn=0.09;
+    tx=c.px; ty=c.py; spd=10; turn=0.10;
     const dM=dist(c.x,c.y,s.x,s.y);
     c.asdicT=(c.asdicT||0)-dt;
     if(dM<2400 && c.asdicT<=0){ c.asdicT=3.2; ping(900,.09); if(dM<2000) vibrate(22);
@@ -1547,7 +1562,7 @@ function escortAI(c,dt){
       if(c.fixT<=0){ const r=350+Math.random()*1000, a=Math.random()*TAU;
         c.px=clamp((c.lkx||s.x)+Math.cos(a)*r,40,WORLD-40);
         c.py=clamp((c.lky||s.y)+Math.sin(a)*r,40,WORLD-40); c.fixT=5; }
-      tx=c.px; ty=c.py; spd=7; turn=0.07;
+      tx=c.px; ty=c.py; spd=11; turn=0.08;
       const dM=dist(c.x,c.y,s.x,s.y);
       c.asdicT=(c.asdicT||0)-dt;
       if(dM<2400 && c.asdicT<=0){ c.asdicT=4.5; ping(900,.09); if(dM<2000) vibrate(22);
@@ -1567,7 +1582,7 @@ function escortAI(c,dt){
       else { c.px=clamp(WORLD*0.5+(Math.random()-.5)*WORLD*0.5,40,WORLD-40);
              c.py=clamp(WORLD*0.5+(Math.random()-.5)*WORLD*0.5,40,WORLD-40); c.fixT=7; }
     }
-    if(!G.scenario.duel){ tx=c.px||WORLD*0.5; ty=c.py||WORLD*0.4; spd=6; turn=0.06; }
+    if(!G.scenario.duel){ tx=c.px||WORLD*0.5; ty=c.py||WORLD*0.4; spd=8; turn=0.07; }
   }
   // steer with a limited turn rate — a ship cannot pivot on the spot
   const da=norm(angTo(c.x,c.y,tx,ty)-c.hdg);
@@ -1638,8 +1653,33 @@ function creditTons(tons){
   G.patrolTons += tons;
   const car=loadCareer(); car.tonnage += tons; saveCareer(car);
 }
+/* WWII convoy defence: emergency turn, comb the torpedo tracks, escort runs down the track */
+function torpedoSpotted(t){
+  say("Sillage de torpille repéré — le convoi manœuvre en urgence !","cmd");
+  G.convoyBase=norm(G.convoyBase+(Math.random()<.5?1:-1)*(38+Math.random()*20)*D2R);
+  G.zigT=5;
+  for(const c of G.contacts){
+    if(!c.alive) continue;
+    if(c.type==="cargo" && dist(t.x,t.y,c.x,c.y)<1700){
+      // turn parallel to the track to comb it (smallest turn)
+      c.evadeT=45;
+      c.evHdg = Math.abs(norm(t.hdg-c.hdg))<Math.PI/2 ? t.hdg : norm(t.hdg+Math.PI);
+    }
+  }
+  // nearest escort charges down the track toward the launch point
+  let best=null,bd=1e9;
+  for(const c of G.contacts){ if(c.alive&&c.type==="escort"){ const d=dist(t.ox,t.oy,c.x,c.y); if(d<bd){bd=d;best=c;} } }
+  if(best){ best.state="hunt"; best.lkx=t.ox; best.lky=t.oy; best.fixT=5; best.asdicT=0;
+    G.det=clamp(Math.max(G.det,50),0,100); }
+}
+function convoyScatter(){
+  G.convoyBase=norm(G.convoyBase+(Math.random()<.5?1:-1)*(40+Math.random()*25)*D2R);
+  G.zigT=5;
+  for(const c of G.contacts){ if(c.alive&&c.type==="cargo"){ c.evadeT=40; c.evHdg=G.convoyBase; } }
+}
 function startSinking(c){
   c.sinking=true; c.sinkT0=c.sinkT=45+Math.random()*95;   // 45–140 s to founder
+  convoyScatter();
   c.spd=0.6; c.burning = c.kind==="tanker" || Math.random()<0.35;
   surfBoom(); flashScreen(); vibrate([0,120,40,80]);
   G.explosions.push({x:c.x,y:c.y,life:2.2,max:2.2});
@@ -1656,6 +1696,7 @@ function sinkAllied(c){
 function shipLabel(c){ return c.type==="escort" ? "Escorte" : c.kind==="troop" ? "Transport de troupes" : (c.kind==="qship"&&c.revealed) ? "Q-ship" : c.kind==="tanker" ? "Pétrolier" : "Cargo"; }
 function sinkShip(c,slow){
   c.alive=false;
+  if(c.type==="cargo" && !slow) convoyScatter();
   if(!slow){ surfBoom(); flashScreen(); vibrate([0,140,40,90]); } else { boom(); }
   const big = c.kind==="tanker";
   if(big){ setTimeout(boom,350); }                          // fuel goes up in a second blast
@@ -2571,7 +2612,7 @@ function showBrief(){
       <span id="resetCar" style="font-size:10px;color:var(--txt-dim);cursor:pointer;text-decoration:underline">réinitialiser la carrière</span>
     </div>
     <div id="sndStat" style="text-align:center;margin-top:4px;font-size:10px;color:var(--txt-dim)"></div>
-    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v40</div>
+    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v41</div>
     ${COMMON_HINT}`;
   updateSndStat();
   const list=card.querySelector("#scenList");
