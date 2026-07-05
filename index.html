@@ -1515,8 +1515,8 @@ function escortAI(c,dt){
       ax=s.x+Math.cos(away)*850; ay=s.y+Math.sin(away)*850;
     }
     tx=clamp(ax,40,WORLD-40); ty=clamp(ay,40,WORLD-40);
-    spd = isKiller ? (dM>1600?18:15) : 10; turn=0.12;      // destroyers sprint, slow for the Asdic run
     const dM=dist(c.x,c.y,s.x,s.y);
+    spd = isKiller ? (dM>1600?18:15) : 10; turn=0.12;      // destroyers sprint, slow for the Asdic run
     if(!isKiller && c.asdicT>1.8) c.asdicT=1.8;       // pointers ping twice as often
     // active Asdic: periodic ping; refines fix & spikes detection when in range & above the layer
     c.asdicT=(c.asdicT||0)-dt;
@@ -2612,7 +2612,7 @@ function showBrief(){
       <span id="resetCar" style="font-size:10px;color:var(--txt-dim);cursor:pointer;text-decoration:underline">réinitialiser la carrière</span>
     </div>
     <div id="sndStat" style="text-align:center;margin-top:4px;font-size:10px;color:var(--txt-dim)"></div>
-    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v41</div>
+    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v42</div>
     ${COMMON_HINT}`;
   updateSndStat();
   const list=card.querySelector("#scenList");
