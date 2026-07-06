@@ -118,6 +118,7 @@
     border-radius:4px;padding:7px 11px;font:inherit;font-size:11px;font-weight:700;
     letter-spacing:.04em;text-transform:uppercase}
   #mapCtl button:active{background:rgba(30,24,12,.9)}
+  #btnQuit{color:#d98a76!important;border-color:#6b3325!important}
   #hydroCtl{position:absolute;left:0;right:0;bottom:10px;display:flex;justify-content:center;gap:8px;z-index:6}
   #hydroCtl button{background:rgba(10,20,18,.8);color:#78ebc8;border:1px solid #2a6b5c;
     border-radius:4px;padding:8px 14px;font:inherit;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase}
@@ -208,7 +209,7 @@
     </div>
   </div>
   <div class="view" data-v="map"><canvas id="cvMap"></canvas>
-    <div id="mapCtl"><button id="btnBase">⚓ Rentrer à la base</button></div>
+    <div id="mapCtl"><button id="btnBase">⚓ Rentrer à la base</button> <button id="btnQuit">✕ Menu</button></div>
     <div id="hydroCtl">
       <button id="hydroL">◄ Écoute</button>
       <button id="hydroR">Écoute ►</button>
@@ -422,7 +423,7 @@ function play(name,vol,wet,rate){
   s.buffer=SND[name]; if(rate) s.playbackRate.value=rate;
   g.gain.value=vol==null?1:vol;
   s.connect(g); g.connect(dest()); if(wet&&reverb) g.connect(reverb);
-  s.start(); return true;
+  s.start(); return s;
 }
 // fallback synths (used only if a sample is missing) — deliberately DISTINCT from the old build
 function tone(freq,vol,dur,type,slide){ const ac=audio(); if(!ac)return; const t=ac.currentTime;
@@ -434,7 +435,8 @@ function ping(freq,vol){ if(!play("sonar", vol!=null?Math.min(1,vol*4):.9, true)
 function boom(){ if(!play("explosion",1,true)) tone(150,.6,.5,"sine",42); }
 function klaxon(){ if(!play("klaxon",.9,false)){ tone(430,.14,.32,"sawtooth"); setTimeout(()=>tone(320,.14,.4,"sawtooth"),330);} }
 function launchSfx(){ if(!play("torpille",.9,false)) tone(900,.12,.5,"sawtooth",300); play("torprun",.5,false); }
-function planeSfx(){ play("avion",.7,false); }
+let planeSnd=null;
+function planeSfx(){ planeSnd=play("avion",.7,false)||null; }
 function splashSfx(){ play("grenade",.7,true); }
 function surfBoom(){ if(!play("explosurf",1,true)) boom(); }
 // hull groan — kept synthesized (no sample supplied)
@@ -666,7 +668,8 @@ function updateHydrophone(dt){
     if(c.berr===undefined) c.berr=0;
     c.berr=clamp(c.berr+(Math.random()-.5)*0.03,-0.18,0.18);  // slowly drifting bearing error
     const err=(dM/range)*0.14 + G.env.weather.sea*0.05;
-    G.sound.push({b:angTo(s.x,s.y,c.x,c.y)+c.berr*err*6, strong:dM<2300, type:c.type});
+    const tb=angTo(s.x,s.y,c.x,c.y);
+    G.sound.push({b:tb+c.berr*err*6, tb, strong:dM<2300, type:c.type});
   }
 }
 // audible hydrophone: propeller beats swell as a contact nears the LISTENING bearing
@@ -810,7 +813,10 @@ function spawnHazards(scen){
     // lay a minefield just seaward of the coast
     const towardCenter = coast.x>WORLD*0.5 ? -1 : 1;
     const zx=clamp(coast.x + towardCenter*coast.rx*1.25, WORLD*0.12, WORLD*0.88);
-    const zy=WORLD*(0.3+Math.random()*0.4), zr=WORLD*0.13;
+    let zy=WORLD*(0.3+Math.random()*0.4); const zr=WORLD*0.13;
+    let tries=0;
+    while(dist(zx,zy,G.sub.x,G.sub.y) < zr+900 && tries<30){ zy=WORLD*(0.15+Math.random()*0.7); tries++; }
+    if(dist(zx,zy,G.sub.x,G.sub.y) < zr+900) return;          // no safe spot → skip the minefield
     G.mineZone={x:zx,y:zy,r:zr};
     for(let i=0;i<14;i++){
       const a=Math.random()*TAU, rr=Math.sqrt(Math.random())*zr;
@@ -878,6 +884,11 @@ function say(txt,cls=""){
 }
 
 /* ---------- input ---------- */
+// a tap anywhere clears the current on-screen messages (until the next one)
+document.getElementById("stage").addEventListener("pointerdown",()=>{
+  const l=document.getElementById("log");
+  while(l.firstChild) l.firstChild.remove();
+},true);
 document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
   document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("on",x===t));
   document.querySelectorAll(".view").forEach(v=>v.classList.toggle("on",v.dataset.v===t.dataset.v));
@@ -976,6 +987,12 @@ function askConfirm(title,txt,onYes){
   $("#askYes").onclick=()=>{ $("#ask").classList.add("hide"); onYes(); };
   $("#askNo").onclick=()=>$("#ask").classList.add("hide");
 }
+$("#btnQuit").onclick=()=>{
+  if(!G) return;
+  askConfirm("Abandonner la patrouille",
+    "Retour au menu. Le tonnage déjà crédité reste acquis, la sauvegarde de patrouille est effacée.",
+    ()=>{ clearPatrol(); G.running=false; G.over=true; engineStop(); saidOnceReset(); showBrief(); });
+};
 $("#btnBase").onclick=()=>{
   if(!G||G.over) return;
   if(G.phase==="attack" && G.contacts.some(c=>c.type==="cargo"&&c.alive)){
@@ -1458,6 +1475,7 @@ function step(dt){
   else saidOnce.siltot=0;
   G.det=clamp(G.det+detRate*dt,0,100);
   // ---- audio ambience ----
+  if(planeSnd && s.depth>=6){ try{ planeSnd.stop(); }catch(e){} planeSnd=null; }  // underwater: no aircraft noise
   engineSet(s.vel, s.depth<4);
   if(G.det>=72){ G.hbT=(G.hbT||0)-dt; if(G.hbT<=0){ heartbeat(); G.hbT=clamp(1.5-G.det*0.007,0.5,1.4); } }
 
@@ -1622,7 +1640,7 @@ function dropCharges(c){
   // a PATTERN of three charges laid along the escort's run — moving targets get bracketed
   const drops=[0,1,2].map(i=>({
     x:c.x+Math.cos(c.hdg)*i*95, y:c.y+Math.sin(c.hdg)*i*95,
-    delay:i*650 + fuse*22 }));                                  // deeper setting = longer sink time
+    delay:i*650 + fuse*45 }));                                  // ~5 m/s sink rate: time to react
   for(const d of drops){
     setTimeout(()=>{ if(!G||G.over) return;
       splashSfx(); setTimeout(()=>{ if(G&&!G.over){ boom(); chargeHit(d.x,d.y,fuse); } },450);
@@ -1635,7 +1653,8 @@ function chargeHit(cxp,cyp,fuse){
   const dM=dist(cxp,cyp,s.x,s.y);
   const dD=Math.abs(s.depth-fuse);                              // vertical miss distance
   const prox=clamp(1-dM/300,0,1);
-  const depthFactor=clamp(1-dD/50,0,1);                         // burst depth is everything
+  let depthFactor=clamp(1-dD/50,0,1);                           // burst depth is everything…
+  if(dD<85) depthFactor=Math.max(depthFactor,0.15);             // …but a near-depth burst still shakes the boat
   if(prox>0.15 && depthFactor<=0 && !G._fuseMsgT){
     say(s.depth>fuse?"Les grenades explosent AU-DESSUS de nous !":"Les grenades explosent SOUS nous !","cmd");
     G._fuseMsgT=1; setTimeout(()=>{ if(G) G._fuseMsgT=0; },4000);
@@ -2021,13 +2040,17 @@ function drawMap(){
     cx.fillText("écoute "+String(brg).padStart(3,"0")+"°", X(s.x)+Math.cos(s.hydro)*L+6*DPR, Y(s.y)+Math.sin(s.hydro)*L);
   }
 
-  // --- hydrophone bearings (direction only, no range) ---
+  // --- hydrophone bearings: operator reports are COARSE; listening on the needle REFINES one ---
   for(const snd of G.sound){
+    const tuned = Math.abs(norm(snd.b - s.hydro))<0.28;      // needle on the bearing
+    const b = tuned ? snd.tb : snd.b;                        // tuned = true bearing, else drifted report
     const len=(snd.strong?visR*1.4:visR*1.0)*sc;
-    cx.strokeStyle = snd.strong ? "rgba(95,240,138,.5)" : "rgba(95,240,138,.22)";
-    cx.lineWidth=(snd.strong?2:1)*DPR; if(!snd.strong) cx.setLineDash([4*DPR,5*DPR]);
+    cx.strokeStyle = tuned ? "rgba(140,255,190,.9)" : snd.strong ? "rgba(95,240,138,.4)" : "rgba(95,240,138,.18)";
+    cx.lineWidth=(tuned?2.6:snd.strong?2:1)*DPR; if(!snd.strong&&!tuned) cx.setLineDash([4*DPR,5*DPR]);
     cx.beginPath(); cx.moveTo(X(s.x),Y(s.y));
-    cx.lineTo(X(s.x)+Math.cos(snd.b)*len, Y(s.y)+Math.sin(snd.b)*len); cx.stroke(); cx.setLineDash([]);
+    cx.lineTo(X(s.x)+Math.cos(b)*len, Y(s.y)+Math.sin(b)*len); cx.stroke(); cx.setLineDash([]);
+    if(tuned){ cx.fillStyle="rgba(140,255,190,.9)"; cx.font=`${8*DPR}px monospace`; cx.textAlign="left";
+      cx.fillText(snd.strong?"contact FORT":"contact faible", X(s.x)+Math.cos(b)*len*0.6+5*DPR, Y(s.y)+Math.sin(b)*len*0.6); }
   }
   if(G.sound.length){ cx.fillStyle="rgba(95,240,138,.7)"; cx.font=`${9*DPR}px monospace`;
     cx.textAlign="left"; cx.fillText("hydrophone : bruits d'hélices", X(s.x)+10*DPR, Y(s.y)-10*DPR); }
@@ -2160,15 +2183,15 @@ function drawMap(){
   const obj = G.phase==="transit" ? "EN PATROUILLE — recherche d'un convoi"
     : G.scenario.duel ? "DUEL — couler le destroyer"
     : `Convoi #${G.convoyNum||1} — coulés ${G.merchSunk}/${G.need}`;
-  cx.fillText(obj, ox+8*DPR, oy+m-10*DPR);
+  cx.fillText(obj, ox+8*DPR, oy+m-58*DPR);
   if(G.mission && G.mission.state!=="done" && G.missionAnnT<=0){
     const mtxt = G.mission.type==="troop" ? "ORDRE : couler le TRANSPORT du convoi"
       : G.mission.type==="weather" ? "ORDRE : rapport météo au point marqué (surface)"
       : "ORDRE : couler le cargo isolé signalé";
-    cx.fillStyle="rgba(120,200,255,.85)"; cx.fillText(mtxt, ox+8*DPR, oy+m-24*DPR);
+    cx.fillStyle="rgba(120,200,255,.85)"; cx.fillText(mtxt, ox+8*DPR, oy+m-72*DPR);
   }
   if(MAPV.z>1.01){ cx.fillStyle="rgba(152,166,150,.8)"; cx.font=`${9*DPR}px monospace`; cx.textAlign="right";
-    cx.fillText("zoom ×"+MAPV.z.toFixed(1)+" — double-toucher : réinitialiser", ox+m-8*DPR, oy+m-10*DPR); cx.textAlign="left"; }
+    cx.fillText("zoom ×"+MAPV.z.toFixed(1)+" — double-toucher : réinitialiser", ox+m-8*DPR, oy+m-58*DPR); cx.textAlign="left"; }
 }
 
 /* ---------- rendering: periscope ---------- */
@@ -2630,7 +2653,7 @@ function showBrief(){
       <span id="resetCar" style="font-size:10px;color:var(--txt-dim);cursor:pointer;text-decoration:underline">réinitialiser la carrière</span>
     </div>
     <div id="sndStat" style="text-align:center;margin-top:4px;font-size:10px;color:var(--txt-dim)"></div>
-    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v43</div>
+    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v45</div>
     ${COMMON_HINT}`;
   updateSndStat();
   const list=card.querySelector("#scenList");
@@ -2652,7 +2675,11 @@ function showBrief(){
     b.onclick=()=>startMission(sc);
     list.appendChild(b);
   });
-  card.querySelector("#resetCar").onclick=()=>{ saveCareer({patrols:0,tonnage:0}); saveKtb([]); saveUpg({owned:[],spent:0}); showBrief(); };
+  card.querySelector("#resetCar").onclick=()=>{
+    askConfirm("Réinitialiser la carrière",
+      "Tout effacer : tonnage, grades, statistiques, journal de bord, améliorations du chantier et patrouille sauvegardée. Cette action est définitive.",
+      ()=>{ saveCareer({patrols:0,tonnage:0}); saveKtb([]); saveUpg({owned:[],spent:0}); clearPatrol(); showBrief(); });
+  };
   card.querySelector("#showKtb").onclick=showLogbook;
   card.querySelector("#showUpg").onclick=showUpgrades;
   ovl.classList.remove("hide");
