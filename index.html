@@ -316,6 +316,26 @@ function genTerrain(coastChance=0.5){
   }
   return {deep,blobs};
 }
+function genRiver(){
+  // a narrow, shallow estuary channel running north–south (Gulf of St. Lawrence, 1942)
+  const deep=60, blobs=[];
+  blobs.push({x:-WORLD*0.22, y:WORLD*0.5, rx:WORLD*0.52, ry:WORLD*1.4, shoal:1.25});   // west bank
+  blobs.push({x:WORLD*1.22,  y:WORLD*0.5, rx:WORLD*0.52, ry:WORLD*1.4, shoal:1.25});   // east bank
+  blobs.push({x:WORLD*0.34, y:WORLD*0.28, rx:WORLD*0.16, ry:WORLD*0.10, shoal:1.7});   // meander spurs
+  blobs.push({x:WORLD*0.66, y:WORLD*0.58, rx:WORLD*0.16, ry:WORLD*0.10, shoal:1.7});
+  blobs.push({x:WORLD*0.36, y:WORLD*0.84, rx:WORLD*0.14, ry:WORLD*0.09, shoal:1.7});
+  return {deep,blobs};
+}
+function genAnchorage(){
+  // an enclosed bay: land on three sides, two headlands leaving a narrow southern pass
+  const deep=110, blobs=[];
+  blobs.push({x:-WORLD*0.14, y:WORLD*0.5,  rx:WORLD*0.36, ry:WORLD*1.3, shoal:1.35});   // west shore
+  blobs.push({x:WORLD*1.14,  y:WORLD*0.5,  rx:WORLD*0.36, ry:WORLD*1.3, shoal:1.35});   // east shore
+  blobs.push({x:WORLD*0.5,   y:-WORLD*0.16, rx:WORLD*1.3, ry:WORLD*0.36, shoal:1.35});  // north shore
+  blobs.push({x:WORLD*0.16,  y:WORLD*1.02, rx:WORLD*0.30, ry:WORLD*0.16, shoal:1.6});   // SW headland
+  blobs.push({x:WORLD*0.84,  y:WORLD*1.02, rx:WORLD*0.30, ry:WORLD*0.16, shoal:1.6});   // SE headland
+  return {deep,blobs};
+}
 function seabedAt(x,y){
   const T=G.terrain; let dep=T.deep;
   for(const b of T.blobs){
@@ -613,6 +633,71 @@ function updateMission(dt){
       if(M.t<=0){ missionDone("Rapport météo transmis au BdU."); }
     } else if(M.t<120 && M.t>0){ sayOnce("wx","Émission interrompue — revenez au point, en surface.","cmd"); }
   }
+  // commando landing: hold dead-still on the surface at the beach mark, at night
+  if(M.type==="commando" && M.state==="active"){
+    const dM=dist(s.x,s.y,M.x,M.y);
+    if(dM<380 && s.depth<4 && s.vel<0.8){
+      if(M.t===90) say("Au point de débarquement — canot à l'eau, restez immobile !","cmd");
+      M.t-=dt;
+      if(M.t<=0){ missionDone("Équipe débarquée sans encombre. Repli !"); }
+    } else if(M.t<90 && M.t>0){ sayOnce("cmdo","Mise à l'eau interrompue — surface, machines stoppées, au point marqué.","cmd"); }
+  }
+  // milk cow: refuel & rearm alongside the U-tanker
+  if(M.type==="milk" && G.milk && !G.milk.done){
+    const dM=dist(s.x,s.y,G.milk.x,G.milk.y);
+    if(dM<220 && s.depth<4 && s.vel<0.8){
+      if(G.milk.t===60) say("À couple du U-tanker — transbordement en cours, restez en surface !","cmd");
+      G.milk.t-=dt;
+      if(G.milk.t<=0){
+        G.milk.done=true; M.state="done";
+        s.batt=100; s.air=100; s.hull=Math.max(s.hull,85); s.reserve=hasUpg('typeIX')?16:10;
+        for(const tb of s.tubes){ tb.loaded=true; tb.rt=0; }
+        G.shells=60; G.bolds=4;
+        say("Ravitaillement terminé : torpilles, obus, air, batterie — tout est plein !","cmd");
+        G.scenario={...G.scenario, milk:false, air:true, merchants:4, escorts:2, need:2};
+        G.phase="transit"; G.nextConvoyT=25;
+        say("BdU : un convoi approche du secteur — bonne chasse.","cmd");
+      }
+    } else if(G.milk.t<60 && G.milk.t>0){ sayOnce("milk","Transbordement interrompu — revenez à couple, en surface.","cmd"); }
+  }
+  // minelaying: creep through the marked channel, submerged & slow — a mine drops every few seconds
+  if(M.type==="minelay" && M.state==="active"){
+    const dM=dist(s.x,s.y,M.x,M.y);
+    if(dM<520 && s.depth>=8 && s.depth<=40 && s.vel<3.2){
+      M.layT-=dt;
+      if(M.layT<=0){
+        M.layT=8; M.laid++;
+        G.mines.push({x:s.x,y:s.y,live:true,friendly:true});
+        say("Mine mouillée ("+M.laid+"/"+M.needM+").","cmd"); vibrate(25);
+        if(M.laid>=M.needM){
+          missionDone("Champ posé dans le chenal. Repli !");
+          M.victimT=50+Math.random()*70;
+        }
+      }
+    } else if(M.laid>0 && M.laid<M.needM){ sayOnce("mlay","Hors du chenal — revenez dans la zone (8–40 m, lent).","cmd"); }
+  }
+  if(M.type==="minelay" && M.state==="done" && M.victimT>0){
+    M.victimT-=dt;
+    if(M.victimT<=0){
+      const mn=G.mines.find(m2=>m2.friendly&&m2.live);
+      if(mn){ mn.live=false; boom(); G.explosions.push({x:mn.x,y:mn.y,life:3,max:3});
+        creditTons(5200); logSink("Cargo (sur vos mines)",5200,mn.x,mn.y);
+        say("Détonation dans le chenal — un cargo vient de sauter sur vos mines ! (+5 200 t)","alarm"); }
+    }
+  }
+  // port raid: coastal battery returns fire; structures die to the deck gun
+  if(M.type==="port" && M.state==="active"){
+    const bat=(G.structs||[]).find(z=>z.kind==="battery"&&z.alive);
+    if(bat && s.depth<4){
+      const dM=dist(s.x,s.y,bat.x,bat.y);
+      if(dM<1900){
+        bat.gunT-=dt;
+        if(bat.gunT<=0){ bat.gunT=2.6; play("explosion",.3,false,1.8);
+          sayOnce("batt2","La batterie côtière ouvre le feu !","alarm");
+          if(Math.random()<clamp(1-dM/2100,0.2,0.8)){ s.hull-=5+Math.random()*5; flashScreen(); vibrate(90); } }
+      }
+    }
+  }
   // Q-ship: the "easy prey" opens fire when you close in on the surface
   if(M.type==="straggler" && M.state==="active"){
     const q=G.contacts.find(c=>c.straggler&&c.alive);
@@ -707,6 +792,24 @@ const SCENARIOS=[
   {id:"meute", name:"Meute (Rudeltaktik)",
    line:"6 cargos · 2 escortes · 2 U-Boots alliés — coulez-en 4 ensemble.",
    merchants:6, escorts:2, air:false, need:4, coast:0.3, pack:2},
+  {id:"scapa", name:"Pénétration de mouillage",
+   line:"Nuit. Une baie fermée, une passe étroite, un CUIRASSÉ au mouillage.",
+   merchants:0, escorts:2, air:false, need:1, coast:0, anchorage:true, night:true},
+  {id:"commando", name:"Opération commando",
+   line:"Nuit. Déposer une équipe sur la plage marquée — sans se faire voir.",
+   merchants:0, escorts:1, air:false, need:0, coast:1, commando:true, night:true},
+  {id:"milchkuh", name:"Vache à lait (Type XIV)",
+   line:"Rallier le U-tanker au point de RDV, ravitailler… sous menace aérienne (Enigma est lu).",
+   merchants:0, escorts:0, air:true, need:0, coast:0, milk:true},
+  {id:"minelay", name:"Mouillage de mines",
+   line:"Nuit. Poser 8 mines dans le chenal balisé du port — un patrouilleur rôde.",
+   merchants:0, escorts:1, air:false, need:0, coast:1, minelay:true, night:true},
+  {id:"port", name:"Attaque de port",
+   line:"Nuit. Rade ennemie : navires au mouillage, dépôt de carburant, batterie côtière.",
+   merchants:0, escorts:1, air:false, need:0, coast:1, port:true, night:true},
+  {id:"river", name:"Golfe du Saint-Laurent",
+   line:"Chenal étroit, fond à 60 m, courant, trafic sans escorte… mais l'aviation veille.",
+   merchants:0, escorts:0, air:true, need:2, coast:0, river:true},
   {id:"duel", name:"Duel au mort",
    line:"Vous contre un destroyer tenace. Coulez-le ou disparaissez.",
    merchants:0, escorts:1, air:false, need:0, coast:0.25, duel:true},
@@ -716,7 +819,7 @@ const SCENARIOS=[
 let G;
 function newGame(scen){
   const weather=WEATHERS[Math.floor(Math.random()*WEATHERS.length)];
-  const clock=4+Math.random()*16;                 // start anywhere from before dawn to evening
+  const clock=scen.night ? 22+Math.random()*2 : 4+Math.random()*16;
   G={
     t:0, over:false, won:false, running:false,
     sub:{ x:WORLD*0.5, y:WORLD*0.5, hdg:-Math.PI/2, rudder:0,
@@ -728,6 +831,7 @@ function newGame(scen){
           batt:100, scopeRel:0, scope:-Math.PI/2 },
     contacts:[], torps:[], booms:[], planes:[], wrecks:[], pings:[], mines:[], decoys:[],
     shells:60, bolds:4, gunT:0, evtT:90+Math.random()*120, evtCount:0, engineFail:0,
+    layer:90+Math.random()*80,
     intel:[], sound:[], scopeRot:0, mineZone:null,
     pingT:0, det:0, merchSunk:0, escaped:0, patrolTons:0,
     convoyBase:0, zig:0, zigDir:1, zigT:18,
@@ -739,7 +843,11 @@ function newGame(scen){
   };
   // ---- BdU special orders (one per patrol, convoy scenarios only) ----
   G.mission=null; G.missionAnnT=0;
-  if(!scen.duel){
+  if(scen.commando){
+    G.mission={type:"commando", state:"active", prime:4000, t:90, x:0, y:0};
+  } else if(scen.minelay){
+    G.mission={type:"minelay", state:"active", prime:3500, laid:0, needM:8, layT:0, x:0, y:0};
+  } else if(!scen.duel && !scen.milk && !scen.anchorage && !scen.port && !scen.river){
     const mt=Math.random();
     if(mt<0.30) G.mission={type:"troop", state:"pending", prime:3000};
     else if(mt<0.58) G.mission={type:"weather", state:"pending", prime:2500,
@@ -748,8 +856,41 @@ function newGame(scen){
       qship:Math.random()<0.3, spawned:false};
     G.missionAnnT=20+Math.random()*25;
   }
-  G.terrain=genTerrain(scen.coast);
-  placeSub();
+  G.terrain = scen.anchorage ? genAnchorage() : scen.river ? genRiver() : genTerrain(scen.coast);
+  G.bergs=[];
+  if(!scen.anchorage && !scen.river && !scen.port && Math.random()<0.3){   // northern waters: drift ice
+    const drift=Math.random()*TAU;
+    for(let i=0;i<6+Math.floor(Math.random()*4);i++)
+      G.bergs.push({x:WORLD*(0.1+Math.random()*0.8), y:WORLD*(0.1+Math.random()*0.8),
+        r:60+Math.random()*90, a:drift+(Math.random()-.5)*.4, v:0.08+Math.random()*0.1});
+  }
+  if(scen.anchorage) G.current={a:Math.PI/2*(Math.random()<.5?1:-1)+(Math.random()-.5)*.4, v:0.5+Math.random()*0.5};
+  else if(scen.river) G.current={a:Math.PI/2, v:0.8+Math.random()*0.5};   // downstream (south)
+  else G.current=null;
+  if(scen.anchorage){ G.sub.x=WORLD*0.5; G.sub.y=WORLD*0.90; G.sub.hdg=-Math.PI/2; }
+  else placeSub();
+  if(scen.commando || scen.minelay){
+    const coast=G.terrain.blobs.find(b=>!b.reef && b.rx>=WORLD*0.4);
+    const side = coast && coast.x>WORLD*0.5 ? 1 : -1;
+    const bx = coast ? coast.x - side*coast.rx*(scen.minelay?1.12:1.06) : WORLD*0.9;
+    G.mission.x=clamp(bx,150,WORLD-150); G.mission.y=WORLD*(0.3+Math.random()*0.4);
+  }
+  G.structs=[];
+  if(scen.port){
+    const coast=G.terrain.blobs.find(b=>!b.reef && b.rx>=WORLD*0.4);
+    const side = coast && coast.x>WORLD*0.5 ? 1 : -1;
+    const bx = coast ? coast.x - side*coast.rx*0.98 : WORLD*0.92;
+    const y0=WORLD*(0.3+Math.random()*0.3);
+    G.structs.push({kind:"fuel",    x:clamp(bx,120,WORLD-120), y:y0,           hp:3, alive:true, tons:4000});
+    G.structs.push({kind:"crane",   x:clamp(bx,120,WORLD-120), y:y0+520,      hp:2, alive:true, tons:2000});
+    G.structs.push({kind:"battery", x:clamp(bx,120,WORLD-120), y:y0-620,      hp:3, alive:true, tons:1500, gunT:0});
+    // ships moored in the roadstead
+    for(let i=0;i<2;i++)
+      G.contacts.push({type:"cargo", kind:i?"tanker":"liberty", moored:true,
+        x:clamp(bx - side*(700+i*400),120,WORLD-120), y:y0+i*360-150, hdg:Math.PI/2,
+        spd:0, alive:true, fled:false, hp:4+i, tons:i?9000:6000});
+    G.mission={type:"port", state:"active", prime:0, destroyed:0, needS:2};
+  }
   spawnConvoy(scen);
   spawnHazards(scen);
   G.convoyNum=1;
@@ -762,6 +903,34 @@ function placeSub(){
   while(seabedAt(G.sub.x,G.sub.y)<60 && tries<40);            // start in deep water
 }
 function spawnConvoy(scen){
+  if(scen.river){
+    // river traffic: unescorted freighters plying the channel, north- and south-bound
+    for(let i=0;i<3;i++){
+      const south=i%2===0;
+      G.contacts.push({type:"cargo", kind:"liberty", riverLane:true,
+        x:WORLD*0.5+(Math.random()-.5)*300, y:WORLD*(0.15+i*0.3),
+        hdg:south?Math.PI/2:-Math.PI/2, spd:5, alive:true, fled:false, hp:4,
+        tons:5000+Math.floor(Math.random()*3)*1000});
+    }
+    return;
+  }
+  if(scen.anchorage){
+    // capital ships moored deep in the bay, escorts on slow patrol
+    G.contacts.push({type:"cargo", kind:"battleship", x:WORLD*0.44, y:WORLD*0.22, hdg:0,
+      spd:0, alive:true, fled:false, moored:true, hp:8, tons:28000});
+    G.contacts.push({type:"cargo", kind:"cruiser", x:WORLD*0.60, y:WORLD*0.30, hdg:0.4,
+      spd:0, alive:true, fled:false, moored:true, hp:6, tons:12000});
+    for(let e=0;e<scen.escorts;e++){
+      G.contacts.push({type:"escort", x:WORLD*(0.35+e*0.3), y:WORLD*(0.5+e*0.12), hdg:Math.random()*TAU,
+        spd:4, alive:true, state:"patrol", fixT:0, dcT:0, lkx:0, lky:0, px:0, py:0, hp:6, tons:1300});
+    }
+    return;
+  }
+  if(scen.milk){
+    G.milk={x:WORLD*(0.2+Math.random()*0.6), y:WORLD*(0.12+Math.random()*0.3), t:60, done:false};
+    G.mission={type:"milk", state:"active", prime:0};
+    return;
+  }
   if(scen.duel){                                   // lone destroyer hunting the boat
     const a=Math.random()*TAU, d=1800+Math.random()*900;
     const ex=clamp(G.sub.x+Math.cos(a)*d,80,WORLD-80), ey=clamp(G.sub.y+Math.sin(a)*d,80,WORLD-80);
@@ -848,7 +1017,7 @@ function planeAttack(p){
 }
 function updatePlanes(dt){
   const s=G.sub;
-  if(G.air){ G.planeT-=dt; if(G.planeT<=0 && G.planes.length<1){ spawnPlane(); G.planeT=200+Math.random()*160; } }
+  if(G.air){ G.planeT-=dt; if(G.planeT<=0 && G.planes.length<1){ spawnPlane(); G.planeT=(G.scenario.milk?70+Math.random()*70:200+Math.random()*160); } }
   for(const p of G.planes){
     if(p.state==="patrol"){
       // spotting range depends on depth: easy on the surface, harder at periscope depth, none if deep
@@ -1067,9 +1236,11 @@ $("#bGun").onclick=()=>{
   if(s.depth>=4){ say("Canon : impossible en plongée.","cmd"); return; }
   if(G.gunT>0) return;
   if(G.shells<=0){ say("Canon : plus d'obus.","cmd"); return; }
-  let tgt=null,best=1e9;
+  let tgt=null,best=1e9,isStruct=false;
   for(const c of G.contacts){ if(!c.alive) continue;
-    const d=dist(s.x,s.y,c.x,c.y); if(d<best){ best=d; tgt=c; } }
+    const d=dist(s.x,s.y,c.x,c.y); if(d<best){ best=d; tgt=c; isStruct=false; } }
+  for(const z of (G.structs||[])){ if(!z.alive) continue;
+    const d=dist(s.x,s.y,z.x,z.y); if(d<best){ best=d; tgt=z; isStruct=true; } }
   if(!tgt || best>1600){ say("Canon : aucune cible à portée (1 600 m).","cmd"); return; }
   G.gunT=1.4; G.shells--;
   s.detSpike=(s.detSpike||0)+8; G.det=clamp(G.det+6,0,100);   // gunfire is VERY loud
@@ -1078,8 +1249,21 @@ $("#bGun").onclick=()=>{
   if(Math.random()<pHit){
     tgt.hp=(tgt.hp||4)-1;
     G.explosions.push({x:tgt.x,y:tgt.y,life:0.7,max:0.7});
-    if(tgt.hp<=0){ sinkShip(tgt); }
-    else say("Obus au but ! ("+shipLabel(tgt)+")","cmd");
+    if(tgt.hp<=0){
+      if(isStruct){
+        tgt.alive=false; boom(); flashScreen();
+        const nm=tgt.kind==="fuel"?"Dépôt de carburant":tgt.kind==="crane"?"Grues du port":"Batterie côtière";
+        if(tgt.kind==="fuel"){ setTimeout(boom,400); setTimeout(boom,900);
+          G.explosions.push({x:tgt.x,y:tgt.y,life:5,max:5}); }
+        creditTons(tgt.tons); logSink(nm,tgt.tons,tgt.x,tgt.y);
+        say(nm+" détruit"+(tgt.kind==="fuel"?" — explosion en chaîne !":" !"),"alarm");
+        const M2=G.mission;
+        if(M2&&M2.type==="port"&&tgt.kind!=="battery"){ M2.destroyed++;
+          if(M2.destroyed>=M2.needS && M2.state==="active"){ M2.state="done";
+            say("Objectifs du raid détruits — repliez-vous !","cmd"); } }
+      } else { sinkShip(tgt); }
+    }
+    else say("Obus au but ! ("+(isStruct?(tgt.kind==="fuel"?"dépôt":tgt.kind==="crane"?"grues":"batterie"):shipLabel(tgt))+")","cmd");
   } else {
     G.explosions.push({x:tgt.x+(Math.random()-.5)*120,y:tgt.y+(Math.random()-.5)*120,life:0.5,max:0.5});
     say("Gerbe courte — manqué.","cmd");
@@ -1240,6 +1424,17 @@ function step(dt){
   const effSpd=(G.engineFail>0)?Math.min(s.spd,1):s.spd;   // machinery casualty caps at Lente
   const speedKn=SPEEDS[effSpd]*(surfaced?2.2:1);      // Type VII: ~17.7 kn surfaced, ~7.6 submerged
   s.vel += (speedKn - s.vel)*Math.min(1,dt*0.5);     // inertia
+  if(G.current){ s.x+=Math.cos(G.current.a)*G.current.v*dt; s.y+=Math.sin(G.current.a)*G.current.v*dt; }
+  for(const b of (G.bergs||[])){
+    b.x+=Math.cos(b.a)*b.v*dt; b.y+=Math.sin(b.a)*b.v*dt;
+    if(b.x<-200||b.x>WORLD+200||b.y<-200||b.y>WORLD+200){ b.a=norm(b.a+Math.PI); }
+    if(s.depth<16 && dist(s.x,s.y,b.x,b.y)<b.r*0.8 && s.vel>1){
+      s.hull-=s.vel*2; s.vel*=0.3; creak(); vibrate(120);
+      say("COLLISION avec la glace ! La coque encaisse.","alarm");
+      const away=angTo(b.x,b.y,s.x,s.y); s.x+=Math.cos(away)*12; s.y+=Math.sin(away)*12;
+    }
+  }
+  G.nearIce = (G.bergs||[]).some(b=>dist(s.x,s.y,b.x,b.y)<b.r+220);
   if(G.courseTgt){                                   // tap-set course: helm steers for you
     const want=angTo(s.x,s.y,G.courseTgt.x,G.courseTgt.y);
     const da=norm(want-s.hdg);
@@ -1380,8 +1575,13 @@ function step(dt){
   // ---- contacts AI ----
   for(const c of G.contacts){
     if(!c.alive) continue;
+    if(c.type==="cargo" && c.moored) continue;               // moored: dead still until torpedoed
     if(c.type==="cargo"){
-      if(c.evadeT>0){ c.evadeT-=dt;
+      if(c.riverLane && !c.sinking){                 // hold the channel axis
+        const axis=c.hdg>0?Math.PI/2:-Math.PI/2;
+        const corr=clamp((WORLD*0.5-c.x)/900,-0.5,0.5)*(c.hdg>0?-1:1);
+        c.hdg=norm(c.hdg+clamp(norm(axis+corr-c.hdg),-0.35*dt,0.35*dt));
+      } else if(c.evadeT>0){ c.evadeT-=dt;
         c.hdg=norm(c.hdg+clamp(norm(c.evHdg-c.hdg),-0.6*dt,0.6*dt));    // hard rudder — comb the tracks
       } else if(c.sinking){ /* dead in the water */ }
       else c.hdg=norm(c.hdg+clamp(norm(convoyHdg-c.hdg),-0.4*dt,0.4*dt));   // steer onto the zigzag leg
@@ -1407,7 +1607,7 @@ function step(dt){
   // mines : moored mid-water — contact while shallow enough
   if(s.depth<70){
     for(const mn of G.mines){
-      if(!mn.live) continue;
+      if(!mn.live||mn.friendly) continue;
       if(dist(s.x,s.y,mn.x,mn.y)<45){
         mn.live=false; boom(); flashScreen(); vibrate([0,200,60,140]); creak();
         G.explosions.push({x:s.x,y:s.y,life:1.8,max:1.8}); G.booms.push({x:s.x,y:s.y,life:.5});
@@ -1436,7 +1636,7 @@ function step(dt){
   if(G.phase==="attack" && !G.over){
     if(G.scenario.duel){
       if(!G.contacts.some(c=>c.type==="escort"&&c.alive)) disperseConvoy(true);
-    } else {
+    } else if(G.scenario.merchants>0 || G.scenario.anchorage || G.scenario.river){
       const reachable=G.contacts.some(c=>c.type==="cargo"&&c.alive);
       if(!reachable) disperseConvoy(G.merchSunk>=G.need);
     }
@@ -1552,7 +1752,8 @@ function escortAI(c,dt){
         c.lkx=dec.x; c.lky=dec.y; c.fixT=4;                     // the echo returns the decoy, not us
         G.det=clamp(G.det-2.5,0,100);
       } else {
-        const layer = s.depth>130 ? 0.3 : (s.depth<14?0.6:1);   // deep dive (below layer) or surface duct defeats it
+        let layer = s.depth>(G.layer||130) ? 0.3 : (s.depth<14?0.6:1);   // deep dive (below layer) or surface duct defeats it
+      if(G.nearIce) layer*=0.4;                                        // ice clutter masks the echo
         const stillness = 0.45+0.55*clamp(s.vel/3,0,1);          // a stopped boat is harder to pick out from the seabed
         const ret = clamp(1-dM/2400,0,1)*layer*stillness*(1-G.env.weather.sea*0.6);
         if(ret>0.25){ c.lkx=s.x+(Math.random()-.5)*120; c.lky=s.y+(Math.random()-.5)*120; c.fixT=4;
@@ -1576,7 +1777,8 @@ function escortAI(c,dt){
       G.pings.push({x:c.x,y:c.y,life:1.1,max:1.1});
       const dec=activeDecoy();
       if(dec && dist(c.x,c.y,dec.x,dec.y)<2400){ c.lkx=dec.x; c.lky=dec.y; }
-      else { const layer=s.depth>130?0.3:(s.depth<14?0.6:1), still=0.45+0.55*clamp(s.vel/3,0,1);
+      else { let layer=s.depth>(G.layer||130)?0.3:(s.depth<14?0.6:1); if(G.nearIce) layer*=0.4;
+        const still=0.45+0.55*clamp(s.vel/3,0,1);
         const ret=clamp(1-dM/2400,0,1)*layer*still*(1-G.env.weather.sea*0.6);
         if(ret>0.28){ G.det=clamp(G.det+ret*20,0,100); c.lkx=s.x; c.lky=s.y; c.fixT=0; } } }
   } else if(c.withdraw){
@@ -1598,7 +1800,8 @@ function escortAI(c,dt){
         G.pings.push({x:c.x,y:c.y,life:1.1,max:1.1});
         const dec=activeDecoy();
         if(dec && dist(c.x,c.y,dec.x,dec.y)<2400){ c.lkx=dec.x; c.lky=dec.y; }
-        else { const layer=s.depth>130?0.3:(s.depth<14?0.6:1), still=0.45+0.55*clamp(s.vel/3,0,1);
+        else { let layer=s.depth>(G.layer||130)?0.3:(s.depth<14?0.6:1); if(G.nearIce) layer*=0.4;
+        const still=0.45+0.55*clamp(s.vel/3,0,1);
           const ret=clamp(1-dM/2400,0,1)*layer*still*(1-G.env.weather.sea*0.6);
           if(ret>0.30){ G.det=clamp(G.det+ret*16,0,100); c.lkx=s.x; c.lky=s.y; } } }
     } else if(c.fixT<=0){
@@ -1723,7 +1926,7 @@ function sinkAllied(c){
     if(G.merchSunk>=G.need) disperseConvoy(true);
   } else say("Un U-Boot allié a coulé une escorte !","cmd");
 }
-function shipLabel(c){ return c.type==="escort" ? "Escorte" : c.kind==="troop" ? "Transport de troupes" : (c.kind==="qship"&&c.revealed) ? "Q-ship" : c.kind==="tanker" ? "Pétrolier" : "Cargo"; }
+function shipLabel(c){ return c.type==="escort" ? "Escorte" : c.kind==="battleship" ? "Cuirassé" : c.kind==="cruiser" ? "Croiseur" : c.kind==="troop" ? "Transport de troupes" : (c.kind==="qship"&&c.revealed) ? "Q-ship" : c.kind==="tanker" ? "Pétrolier" : "Cargo"; }
 function sinkShip(c,slow){
   c.alive=false;
   if(c.type==="cargo" && !slow) convoyScatter();
@@ -1751,7 +1954,11 @@ function onMerchantSunk(c,slow){
 }
 function disperseConvoy(success){
   if(G.phase!=="attack") return;
-  G.phase="transit"; G.nextConvoyT=45+Math.random()*40;
+  G.phase="transit";
+  G.nextConvoyT = G.scenario.anchorage ? 1e9 : 45+Math.random()*40;
+  if(G.scenario.anchorage && success){
+    say("Le mouillage est en flammes ! Sortez de la baie et rentrez à la base !","alarm");
+  }
   for(const c of G.contacts){                       // survivors run for the horizon, visibly
     if(!c.alive||c.sinking) continue;
     c.withdraw=true;
@@ -1893,6 +2100,14 @@ function drawDepthGauge(cx,w,h,s){
   cx.fillStyle="rgba(224,83,58,.12)"; cx.fillRect(x-2*DPR,yc,18*DPR,bot-yc);
   cx.strokeStyle="rgba(224,83,58,.6)"; cx.lineWidth=1*DPR;
   cx.beginPath(); cx.moveTo(x-2*DPR,yc); cx.lineTo(x+16*DPR,yc); cx.stroke();
+  // bathythermograph: thermal layer depth (below it, enemy Asdic is blunted)
+  if(G.layer){
+    const yl=top+span*(G.layer/MX);
+    cx.strokeStyle="rgba(120,200,255,.7)"; cx.lineWidth=1.4*DPR; cx.setLineDash([5*DPR,4*DPR]);
+    cx.beginPath(); cx.moveTo(x-2*DPR,yl); cx.lineTo(x+16*DPR,yl); cx.stroke(); cx.setLineDash([]);
+    cx.fillStyle="rgba(120,200,255,.8)"; cx.font=`${8*DPR}px monospace`; cx.textAlign="left";
+    cx.fillText("COUCHE "+Math.round(G.layer)+" m", x+20*DPR, yl+3*DPR);
+  }
   cx.strokeStyle="#3c463d"; cx.lineWidth=2*DPR;
   cx.beginPath(); cx.moveTo(x,top); cx.lineTo(x,bot); cx.stroke();
   cx.fillStyle="#7d8a7c"; cx.font=`${10*DPR}px monospace`; cx.textAlign="left";
@@ -2073,7 +2288,7 @@ function drawMap(){
     cx.lineTo(px+Math.cos(c.hdg)*11*DPR,py+Math.sin(c.hdg)*11*DPR); cx.stroke();
     cx.fillStyle= esc?`rgba(224,83,58,${a})`:`rgba(232,185,74,${a})`;
     cx.font=`${9*DPR}px monospace`; cx.textAlign="center";
-    cx.fillText(c.sinking?"EN PERDITION":esc?"ESCORTE":c.kind==="troop"?"TRANSPORT":(c.kind==="qship"&&c.revealed)?"Q-SHIP":c.kind==="tanker"?"PÉTROLIER":"LIBERTY",px,py-9*DPR);
+    cx.fillText(c.sinking?"EN PERDITION":esc?"ESCORTE":c.kind==="battleship"?"CUIRASSÉ":c.kind==="cruiser"?"CROISEUR":c.kind==="troop"?"TRANSPORT":(c.kind==="qship"&&c.revealed)?"Q-SHIP":c.kind==="tanker"?"PÉTROLIER":"LIBERTY",px,py-9*DPR);
   }
 
   // TDC locked target bracket
@@ -2144,6 +2359,62 @@ function drawMap(){
   cx.fillStyle="rgba(95,240,138,.5)"; cx.font=`${10*DPR}px monospace`;
   cx.textAlign="left"; cx.fillText("N",ox+m/2-3*DPR,oy+12*DPR);
   cx.textAlign="left"; cx.fillStyle="rgba(232,185,74,.85)"; cx.font=`${11*DPR}px monospace`;
+  // harbour structures (port raid)
+  for(const z of (G.structs||[])){
+    if(!z.alive) continue;
+    const px=X(z.x),py=Y(z.y);
+    cx.fillStyle = z.kind==="battery" ? "rgba(224,83,58,.85)" : "rgba(232,185,74,.85)";
+    cx.fillRect(px-4*DPR,py-4*DPR,8*DPR,8*DPR);
+    cx.font=`${8*DPR}px monospace`; cx.textAlign="center";
+    cx.fillText(z.kind==="fuel"?"DÉPÔT":z.kind==="crane"?"GRUES":"⚠ BATTERIE",px,py-8*DPR);
+  }
+  // minelaying channel
+  if(G.mission && G.mission.type==="minelay" && G.mission.state==="active"){
+    const M2=G.mission, px=X(M2.x),py=Y(M2.y);
+    cx.strokeStyle="rgba(232,185,74,.8)"; cx.lineWidth=1.4*DPR; cx.setLineDash([5*DPR,4*DPR]);
+    cx.beginPath(); cx.arc(px,py,520*sc,0,TAU); cx.stroke(); cx.setLineDash([]);
+    cx.fillStyle="rgba(232,185,74,.9)"; cx.font=`${9*DPR}px monospace`; cx.textAlign="center";
+    cx.fillText("CHENAL — mines "+M2.laid+"/"+M2.needM,px,py-524*sc-5*DPR);
+  }
+  // drift ice
+  for(const b of (G.bergs||[])){
+    const px=X(b.x),py=Y(b.y),r=b.r*sc;
+    cx.fillStyle="rgba(225,240,248,.35)"; cx.strokeStyle="rgba(225,240,248,.6)"; cx.lineWidth=1*DPR;
+    cx.beginPath();
+    for(let k=0;k<6;k++){ const a=k/6*TAU, rr=r*(0.7+((k*37+((b.x|0)%7))%10)/22);
+      const vx=px+Math.cos(a)*rr, vy=py+Math.sin(a)*rr; k?cx.lineTo(vx,vy):cx.moveTo(vx,vy); }
+    cx.closePath(); cx.fill(); cx.stroke();
+  }
+  if((G.bergs||[]).length){ zlabel("GLACES DÉRIVANTES", G.bergs[0].x, G.bergs[0].y-200, "rgba(225,240,248,.8)"); }
+  // current arrow (passes & estuaries: it sets you off course)
+  if(G.current){
+    const px=ox+m-36*DPR, py=oy+34*DPR;
+    cx.save(); cx.translate(px,py); cx.rotate(G.current.a);
+    cx.strokeStyle="rgba(120,200,255,.8)"; cx.lineWidth=2*DPR;
+    cx.beginPath(); cx.moveTo(-10*DPR,0); cx.lineTo(8*DPR,0); cx.stroke();
+    cx.beginPath(); cx.moveTo(8*DPR,0); cx.lineTo(3*DPR,-4*DPR); cx.moveTo(8*DPR,0); cx.lineTo(3*DPR,4*DPR); cx.stroke();
+    cx.restore();
+    cx.fillStyle="rgba(120,200,255,.8)"; cx.font=`${8*DPR}px monospace`; cx.textAlign="right";
+    cx.fillText("COURANT "+G.current.v.toFixed(1)+" m/s", ox+m-8*DPR, py+16*DPR);
+  }
+  // milk-cow rendezvous
+  if(G.milk && !G.milk.done){
+    const px=X(G.milk.x),py=Y(G.milk.y);
+    cx.save(); cx.translate(px,py);
+    cx.fillStyle="rgba(150,190,180,.9)";
+    cx.beginPath(); cx.moveTo(11*DPR,0); cx.lineTo(-8*DPR,-5*DPR); cx.lineTo(-8*DPR,5*DPR); cx.closePath(); cx.fill();
+    cx.restore();
+    cx.fillStyle="rgba(150,220,200,.9)"; cx.font=`${9*DPR}px monospace`; cx.textAlign="center";
+    cx.fillText(G.milk.t<60?("U-TANKER "+Math.ceil(G.milk.t)+" s"):"U-TANKER (RDV)",px,py-12*DPR);
+  }
+  // commando landing mark
+  if(G.mission && G.mission.type==="commando" && G.mission.state!=="done"){
+    const M=G.mission, px=X(M.x),py=Y(M.y);
+    cx.strokeStyle="rgba(232,185,74,.9)"; cx.lineWidth=1.5*DPR; cx.setLineDash([4*DPR,4*DPR]);
+    cx.beginPath(); cx.arc(px,py,9*DPR,0,TAU); cx.stroke(); cx.setLineDash([]);
+    cx.fillStyle="rgba(232,185,74,.9)"; cx.font=`${9*DPR}px monospace`; cx.textAlign="center";
+    cx.fillText(M.t<90?("DÉBARQUEMENT "+Math.ceil(M.t)+" s"):"DÉBARQUEMENT",px,py-13*DPR);
+  }
   // weather-report mark
   if(G.mission && G.mission.type==="weather" && G.mission.state!=="done"){
     const M=G.mission, px=X(M.x),py=Y(M.y);
@@ -2180,13 +2451,23 @@ function drawMap(){
   }
   cx.restore();   // end world clip
   cx.fillStyle="rgba(232,185,74,.85)"; cx.font=`${11*DPR}px monospace`; cx.textAlign="left";
-  const obj = G.phase==="transit" ? "EN PATROUILLE — recherche d'un convoi"
+  const obj = G.scenario.minelay ? "MINAGE — chenal du port"
+    : G.scenario.port ? "RAID — port ennemi"
+    : G.scenario.river ? `ESTUAIRE — coulés ${G.merchSunk}/${G.need}`
+    : G.scenario.anchorage ? (G.phase==="transit"?"OBJECTIF DÉTRUIT — sortir de la baie":"MOUILLAGE — couler le cuirassé")
+    : G.scenario.milk ? (G.milk&&G.milk.done?"Ravitaillé — en chasse":"RDV — rallier le U-tanker")
+    : G.scenario.commando ? "INFILTRATION — point de débarquement"
+    : G.phase==="transit" ? "EN PATROUILLE — recherche d'un convoi"
     : G.scenario.duel ? "DUEL — couler le destroyer"
     : `Convoi #${G.convoyNum||1} — coulés ${G.merchSunk}/${G.need}`;
   cx.fillText(obj, ox+8*DPR, oy+m-58*DPR);
   if(G.mission && G.mission.state!=="done" && G.missionAnnT<=0){
     const mtxt = G.mission.type==="troop" ? "ORDRE : couler le TRANSPORT du convoi"
       : G.mission.type==="weather" ? "ORDRE : rapport météo au point marqué (surface)"
+      : G.mission.type==="commando" ? "ORDRE : déposer l'équipe au point marqué (surface, stoppé)"
+      : G.mission.type==="milk" ? "ORDRE : rallier le U-tanker (surface, à couple)"
+      : G.mission.type==="minelay" ? "ORDRE : mouiller 8 mines dans le chenal (8–40 m, lent)"
+      : G.mission.type==="port" ? "ORDRE : détruire dépôt et grues au canon (gare à la batterie)"
       : "ORDRE : couler le cargo isolé signalé";
     cx.fillStyle="rgba(120,200,255,.85)"; cx.fillText(mtxt, ox+8*DPR, oy+m-72*DPR);
   }
@@ -2240,7 +2521,8 @@ function drawPeri(){
       const swell = sea*scale*4*DPR*Math.sin(G.t*1.5+o.dM*0.01);
       // foreshortening: angle between the ship's heading and our line of sight
       const asp=norm(o.c.hdg - angTo(s.x,s.y,o.c.x,o.c.y));
-      const xscale=(asp<0?-1:1)*(0.26+0.74*Math.abs(Math.sin(asp)));  // bow/stern-on → narrow, beam → wide
+      const sn=Math.sin(asp);
+      const xscale=clamp(sn/0.10,-1,1)*(0.10+0.90*Math.abs(sn));  // narrow head-on, wide abeam — no sudden flip
       const sink01 = o.c.sinking ? clamp(1-o.c.sinkT/o.c.sinkT0,0,1) : 0;
       cx.globalAlpha=fade;
       drawShipSil(cx,px,horizon+swell,scale*DPR,o.c.type,xscale,sink01,o.c.burning);
@@ -2304,7 +2586,7 @@ function drawPeri(){
     // target under the crosshair — dark pill, bright text + aspect
     if(centered && Math.abs(cRel)<8*D2R){
       const kk=centered.c.kind;
-      const label=(centered.c.type==="escort"?"ESCORTE":kk==="troop"?"TRANSPORT":(kk==="qship"&&centered.c.revealed)?"Q-SHIP":kk==="tanker"?"PÉTROLIER":"LIBERTY")+"  "+Math.round(centered.dM)+" m";
+      const label=(centered.c.type==="escort"?"ESCORTE":kk==="battleship"?"CUIRASSÉ":kk==="cruiser"?"CROISEUR":kk==="troop"?"TRANSPORT":(kk==="qship"&&centered.c.revealed)?"Q-SHIP":kk==="tanker"?"PÉTROLIER":"LIBERTY")+"  "+Math.round(centered.dM)+" m";
       const asp=aspectLabel(centered.c,s);
       const ty=horizon-80*DPR;
       cx.font=`bold ${13*DPR}px monospace`; const tw=cx.measureText(label).width;
@@ -2469,7 +2751,7 @@ function updateComms(dt){
      ["Hydrophone", s.depth<4?"inutilisable (surface)":(G.sound.length?G.sound.length+" bruit(s) d'hélice":"silence"),
        s.depth<4?"amb":G.sound.length?"ok":""],
      ["Plus proche (relèvement)", G.sound.length?String(Math.round((G.sound[0].b*R2D+90+360)%360)).padStart(3,"0")+"°":"—"],
-     ["Détection ennemie", Math.round(G.det)+" %", detCls],
+     ["Couche thermique (bathy.)", Math.round(G.layer||130)+" m — plonger dessous aveugle l'Asdic"],
    ].concat(G.air?[["Veille aérienne (visuelle)",
        G.planes.some(p=>p.state==="attack")?"AVION EN ATTAQUE":(s.depth<6?(G.planes.length?G.planes.length+" en vue":"RAS"):"— (en plongée)"),
        G.planes.some(p=>p.state==="attack")?"bad":(s.depth<6&&G.planes.length?"amb":"")]]:[]))+
@@ -2582,7 +2864,9 @@ function resumePatrol(){
   if(G.gunT==null) G.gunT=0;
   if(G.sub.air==null) G.sub.air=100;
   if(G.sub.hydro==null) G.sub.hydro=0;
+  if(G.layer==null) G.layer=130;
   if(!G.allies) G.allies=[];
+  if(G.scenario.milk && !G.milk) G.milk={x:WORLD/2,y:WORLD/2,t:60,done:true};
   for(const t of G.torps) t.homing=null;           // homing refs don't survive serialization
   G.sub.tdc={on:false,tgt:null,valid:false,gyro:0,brg:0,rng:0,spd:0,crs:0}; // relink safety
   saidOnceReset(); ovl.classList.add("hide"); resize(); updateFireBtn(); syncSpeedBtns();
@@ -2605,7 +2889,7 @@ const COMMON_HINT=`
       <b>Asdic</b> : en chasse, l'escorte « pingue » — plongez sous la couche thermique (~130 m) pour brouiller son écho.
       <b>Batterie</b> : les moteurs électriques se vident en plongée ; faites surface aux diesels (la nuit) pour recharger.
       <b>Gare</b> : torpilles parfois défectueuses, champs de mines (zone rouge) et hauts-fonds (récifs pointillés).
-      <b>Naufrage</b> : un navire torpillé coule souvent LENTEMENT (il stoppe, gîte, brûle parfois) — le tonnage n'est crédité que quand il sombre ; une 2e torpille ou le canon l'achève. <b>Ordres du BdU</b> : la radio peut assigner une mission spéciale (transport de troupes, rapport météo, cargo isolé… méfiance) avec prime au tonnage. <b>Escortes</b> : elles chassent en équipe (une tient le contact Asdic, l'autre attaque), anticipent ta route et quadrillent le secteur après perte de contact — les grenades sont réglées sur TA profondeur estimée au largage — changer de profondeur (et de cap) pendant qu'elles coulent te met à l'abri ! <b>Hydrophone</b> (Carte) : oriente l'écoute avec ◄/► — le battement d'hélices enfle quand un navire est sur le relèvement. <b>Chantier</b> (menu) : dépense ton tonnage en améliorations. <b>Air</b> : en plongée le CO₂ monte (~10 min d'air) — faites surface pour ventiler. <b>Avaries</b> : aux Postes, choisissez la priorité de l'équipe de réparation. <b>Silence total</b> : bouton Silence + machine à Stop = moteurs coupés, équipage figé. Vous devenez quasi introuvable
+      <b>Missions spéciales</b> : mouillage (nuit, passe étroite, cuirassé immobile — gros tonnage), commando (surface stoppée au point marqué, 90 s), vache à lait (ravitaillement complet à couple du U-tanker, gare aux avions). <b>Naufrage</b> : un navire torpillé coule souvent LENTEMENT (il stoppe, gîte, brûle parfois) — le tonnage n'est crédité que quand il sombre ; une 2e torpille ou le canon l'achève. <b>Ordres du BdU</b> : la radio peut assigner une mission spéciale (transport de troupes, rapport météo, cargo isolé… méfiance) avec prime au tonnage. <b>Escortes</b> : elles chassent en équipe (une tient le contact Asdic, l'autre attaque), anticipent ta route et quadrillent le secteur après perte de contact — les grenades sont réglées sur TA profondeur estimée au largage — changer de profondeur (et de cap) pendant qu'elles coulent te met à l'abri ! <b>Hydrophone</b> (Carte) : oriente l'écoute avec ◄/► — le battement d'hélices enfle quand un navire est sur le relèvement. <b>Chantier</b> (menu) : dépense ton tonnage en améliorations. <b>Air</b> : en plongée le CO₂ monte (~10 min d'air) — faites surface pour ventiler. <b>Avaries</b> : aux Postes, choisissez la priorité de l'équipe de réparation. <b>Silence total</b> : bouton Silence + machine à Stop = moteurs coupés, équipage figé. Vous devenez quasi introuvable
       (mais immobile) ; tirer ou souffler les ballasts rompt le silence. Idéal pour semer un destroyer à l'Asdic.
       <b>Patrouille continue</b> : un convoi coulé/dispersé, le sous-marin reste en mer (batterie, coque, avaries conservées),
       l'équipage répare, et un nouveau convoi est signalé. Bouton <b>⚓ Rentrer à la base</b> (carte) pour clore la patrouille.
@@ -2645,15 +2929,13 @@ function showBrief(){
     <div class="obj">Carrière : <b>${car.patrols}</b> patrouille(s) · <b>${car.tonnage.toLocaleString("fr")} t</b> coulé(es)<br>
       Grade : <b>${rankOf(car.tonnage)}</b></div>
     <div id="scenList"></div>
-    <div style="text-align:center;margin-top:6px">
-      <span id="showKtb" style="font-size:11px;color:var(--phos);cursor:pointer;text-decoration:underline">journal de bord</span>
-      <span style="color:var(--txt-dim)"> · </span>
-      <span id="showUpg" style="font-size:11px;color:var(--amber);cursor:pointer;text-decoration:underline">chantier</span>
-      <span style="color:var(--txt-dim)"> · </span>
-      <span id="resetCar" style="font-size:10px;color:var(--txt-dim);cursor:pointer;text-decoration:underline">réinitialiser la carrière</span>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="go" id="showKtb" style="padding:10px 6px;font-size:11.5px">📖 Journal</button>
+      <button class="go" id="showUpg" style="padding:10px 6px;font-size:11.5px">⚙ Chantier</button>
+      <button class="go" id="resetCar" style="padding:10px 6px;font-size:11.5px;color:#d98a76">↺ Réinit.</button>
     </div>
     <div id="sndStat" style="text-align:center;margin-top:4px;font-size:10px;color:var(--txt-dim)"></div>
-    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v45</div>
+    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v47</div>
     ${COMMON_HINT}`;
   updateSndStat();
   const list=card.querySelector("#scenList");
@@ -2669,7 +2951,7 @@ function showBrief(){
   }
   SCENARIOS.forEach(sc=>{
     const b=document.createElement("button");
-    b.className="go"; b.style.marginBottom="9px"; b.style.textAlign="left";
+    b.className="go"; b.style.marginBottom="7px"; b.style.textAlign="left"; b.style.padding="9px 12px";
     b.innerHTML=`<span style="color:var(--amber)">${sc.name}</span><br>`+
                 `<span style="font-size:11px;color:var(--txt-dim);letter-spacing:.04em;text-transform:none">${sc.line}</span>`;
     b.onclick=()=>startMission(sc);
