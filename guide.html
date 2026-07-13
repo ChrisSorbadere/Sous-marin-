@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0d1411">
+<title>U-Boot — Guide du commandant</title>
+<style>
+  :root{ --brass:#c9a24b; --brass-d:#8a6e2e; --amber:#e8b94a; --phos:#5ff08a;
+    --phos-d:#1d6b3a; --red:#e0533a; --txt:#d8e0d4; --dim:#98a696; }
+  *{box-sizing:border-box}
+  body{margin:0;background:#060907;color:var(--txt);
+    font-family:"Consolas","SF Mono",ui-monospace,monospace;
+    font-size:14px;line-height:1.65;padding:14px 14px 60px}
+  main{max-width:640px;margin:0 auto}
+  h1{font-size:20px;letter-spacing:.12em;color:var(--amber);text-transform:uppercase;
+    border-bottom:3px solid var(--brass);padding-bottom:8px;margin:10px 0 4px}
+  .sub{color:var(--phos);font-size:11px;letter-spacing:.2em;text-transform:uppercase;margin-bottom:22px}
+  h2{font-size:15px;letter-spacing:.1em;color:var(--amber);text-transform:uppercase;
+    margin:34px 0 10px;border-left:4px solid var(--brass-d);padding-left:10px}
+  h3{font-size:13px;color:var(--phos);margin:20px 0 6px;text-transform:uppercase;letter-spacing:.06em}
+  p{margin:8px 0}
+  b{color:var(--txt)}
+  .k{color:var(--phos);font-weight:700}
+  .a{color:var(--amber)}
+  .r{color:var(--red)}
+  .d{color:var(--dim)}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;margin:10px 0}
+  td,th{padding:6px 8px;border-bottom:1px solid rgba(120,150,120,.16);vertical-align:top;text-align:left}
+  th{color:var(--amber);font-size:11px;text-transform:uppercase;letter-spacing:.08em}
+  .box{background:linear-gradient(#141a16,#0a0e0b);border:1px solid var(--brass-d);
+    border-left:4px solid var(--phos-d);border-radius:4px;padding:10px 14px;margin:12px 0;font-size:13px}
+  .box.warn{border-left-color:var(--red)}
+  ul{margin:6px 0;padding-left:20px}
+  li{margin:4px 0}
+  .toc{background:#0b100c;border:1px solid #1c241e;border-radius:4px;padding:12px 16px;font-size:13px}
+  .toc a{color:var(--phos);text-decoration:none}
+  .toc a:active{color:var(--amber)}
+  a.top{display:inline-block;margin-top:6px;color:var(--dim);font-size:11px;text-decoration:none}
+</style>
+</head>
+<body>
+<main id="haut">
+<h1>U-Boot — Chasse en Atlantique</h1>
+<div class="sub">Guide du commandant · Kriegsmarine 1939-1945</div>
+
+<div class="toc">
+<b class="a">SOMMAIRE</b><br>
+<a href="#prise">1. Prise en main</a><br>
+<a href="#onglets">2. Les quatre postes</a><br>
+<a href="#manoeuvre">3. Manœuvre &amp; navigation</a><br>
+<a href="#discretion">4. Détection &amp; discrétion</a><br>
+<a href="#armes">5. Armes</a><br>
+<a href="#hydro">6. L'hydrophone</a><br>
+<a href="#survie">7. Survivre au grenadage</a><br>
+<a href="#ressources">8. Air, gazole, batterie, équipage</a><br>
+<a href="#aviation">9. La menace aérienne</a><br>
+<a href="#scenarios">10. Les 15 scénarios</a><br>
+<a href="#campagne">11. La campagne 1940-1945</a><br>
+<a href="#chantier">12. Le chantier naval</a><br>
+<a href="#missions">13. Ordres du BdU &amp; événements</a><br>
+<a href="#carriere">14. Carrière, journal, sauvegarde</a><br>
+<a href="#tactiques">15. Dix conseils de vieux loup</a>
+</div>
+
+<h2 id="prise">1. Prise en main</h2>
+<p>Vous commandez un U-Boot Type VII dans l'Atlantique. L'objectif général : <b>couler du tonnage</b> et rentrer vivant. Le tonnage est votre monnaie — il fait monter votre grade et paie les améliorations du chantier.</p>
+<p>La <b>barre de statut</b> (8 cases) affiche en permanence : <span class="k">Prof.</span> (profondeur en m), <span class="k">Cap</span> (0-359°), <span class="k">Vit. nd</span> (vitesse en nœuds), <span class="k">Alerte</span> (R.A.S. / TRAQUE / <span class="r">ACCROCHÉ</span>), <span class="k">Coque</span>, <span class="k">Batt.</span>, <span class="k">Air</span> et <span class="k">Gazole</span>.</p>
+<div class="box">Un <b>toucher n'importe où</b> sur l'écran efface les messages affichés. La poignée <b>« ▾ masquer les commandes »</b> replie le panneau pour jouer plein écran. À la première partie, un <b>tutoriel</b> en 4 étapes vous guide.</div>
+
+<h2 id="onglets">2. Les quatre postes</h2>
+<h3>Poste de pilotage</h3>
+<p>Vue du bateau : échelle de profondeur (zone <span class="r">rouge</span> = écrasement ; ligne <span class="a">COUCHE</span> cyan = couche thermique, voir §4), inclinomètre d'assiette, bulles de ballast. En plongée profonde, la condensation coule sur la vitre ; sous grenadage, tout tremble.</p>
+<h3>Périscope</h3>
+<p>Utilisable à ≤ 14 m, périscope hissé (<span class="k">Périscope ▲</span>). <b>Glissez le doigt</b> pour balayer l'horizon, <b>touchez un navire</b> pour l'acquérir au TDC. Boutons : <span class="k">◄/► Scope</span> (rotation fine), <span class="k">TDC</span> (verrouiller/libérer), <span class="k">Cap</span> (recentrer sur la proue), <span class="k">Attaque/Veille</span> (voir §4). En haut : relèvement, visibilité, heure, météo. Par mer forte, l'optique embarque des vagues.</p>
+<h3>Carte tactique</h3>
+<p><b>Pincez</b> pour zoomer (×1-5), glissez pour déplacer, <b>touchez</b> pour poser un cap (la barre suit seule), <b>double-touchez</b> pour réinitialiser. Boutons : <span class="k">⚓ Rentrer à la base</span> (clôt la patrouille), <span class="k">📜</span> (journal de quart : tous les messages horodatés), <span class="k">✕ Menu</span> (abandon), <span class="k">◄ Écoute / Écoute ►</span> (hydrophone, §6). La carte montre les contacts vus (estompés avec l'âge), relèvements sonores, mines, glaces, courant, points de mission.</p>
+<h3>Postes</h3>
+<p>L'état complet du bord : torpilles, machines, gazole, avaries (avec les <b>4 boutons de priorité</b> de l'équipe de réparation : Auto / Voie d'eau / Incendie / Coque), blessés, moral, air, sonar, conditions (visibilité, lune, couche), ordre du BdU en cours.</p>
+
+<h2 id="manoeuvre">3. Manœuvre &amp; navigation</h2>
+<table>
+<tr><th>Commande</th><th>Effet</th></tr>
+<tr><td class="k">Gouvernail ◄ / ►</td><td>Maintenir pour tourner. Reprend la main sur le cap automatique.</td></tr>
+<tr><td class="k">Machine</td><td>Stop / Lente / Moy. / Rapide. En surface aux diesels : ×2,2 (17,6 nd max). Plus vite = plus de bruit et de gazole.</td></tr>
+<tr><td class="k">Immersion</td><td>Surface / Périsc. (12 m) / ▲▼ par 15 m (maintenir pour répéter). La plongée est lente et délibérée.</td></tr>
+<tr><td class="k">⚡ Plongée</td><td>Crash-dive : descente ~2× plus rapide, klaxon — mais bruyant.</td></tr>
+<tr><td class="k">⚡ Surface</td><td>Chasse d'eau d'urgence : remontée très rapide, très bruyante.</td></tr>
+<tr><td class="k">1× / 4× / 8×</td><td>Compression du temps (barre d'onglets). Se coupe seule au moindre danger.</td></tr>
+</table>
+<div class="box">Le <b>courant</b> (flèche COURANT sur la carte, dans les baies et estuaires) vous dérive en permanence — corrigez le cap dans les passes étroites.</div>
+
+<h2 id="discretion">4. Détection &amp; discrétion</h2>
+<p>Le U-Boot n'a <b>aucun instrument de détection de soi-même</b> — comme dans la réalité. La case <span class="k">Alerte</span> ne montre que ce que l'équipage perçoit :</p>
+<ul>
+<li><b>R.A.S.</b> — personne ne vous cherche.</li>
+<li><b class="a">TRAQUE</b> — une escorte quadrille le secteur en pingant.</li>
+<li><b class="r">ACCROCHÉ</b> — une escorte fonce sur vous (liseré rouge pulsant, pings sur la coque, vibrations).</li>
+</ul>
+<p>Ce qui vous rend repérable : la <b>vitesse</b>, la <b>surface</b> de jour, le <b>périscope</b> (surtout le gros périscope de veille), le canon, la chasse d'eau, le sillage de vos torpilles (jour/mer calme). Ce qui vous protège :</p>
+<ul>
+<li><b>Silence total</b> (bouton) : machines au minimum, équipage muet.</li>
+<li><b>La couche thermique</b> (ligne COUCHE au pilotage, 90-170 m selon la patrouille) : plonger <b>dessous</b> aveugle l'Asdic.</li>
+<li><b>L'immobilité</b> : un bateau stoppé se confond avec le fond.</li>
+<li><b>La nuit</b> — surtout <b>sans lune</b> ; la pleine lune vous trahit.</li>
+<li><b>Le gros temps</b> : mer forte = Asdic et veilleurs dégradés (mais votre optique aussi).</li>
+<li><b>Glaces et épaves</b> : à proximité, leurs échos masquent les vôtres.</li>
+<li><b>Périscope d'attaque</b> (bouton Attaque/Veille) : fin et discret, champ 36°. Le périscope de <b>veille</b> voit large (52°) et mieux la nuit, mais son tube est voyant.</li>
+</ul>
+
+<h2 id="armes">5. Armes</h2>
+<h3>Torpilles (4 tubes + réserve)</h3>
+<p>Deux façons de tirer :</p>
+<ul>
+<li><b>À la proue</b> : alignez la marque PROUE sur la cible ; quand « SOLUTION DE TIR » passe au vert (clic + vibration), <span class="k">FEU</span>.</li>
+<li><b>Au TDC</b> : touchez un navire au périscope pour le verrouiller — la carte trace la <b>route de la torpille</b> (vert) et la <b>position future de la cible</b> (ambre). Tir en anticipation, même cible non alignée.</li>
+</ul>
+<p><span class="k">Salve</span> tire 2 torpilles en éventail (ou une <b>T5 acoustique</b> si achetée : elle poursuit l'escorte la plus proche). Défauts historiques possibles : percuteur défectueux, explosion prématurée. Portée 3 200 m.</p>
+<div class="box">Un navire torpillé coule souvent <b>lentement</b> (il stoppe, gîte, brûle — « EN PERDITION ») : le tonnage n'est crédité qu'au naufrage. Achevez-le (2<sup>e</sup> torpille, canon) ou attendez… pendant que les escortes vous cherchent. ~1 fois sur 3 : coup fatal immédiat.</div>
+<h3>Canon de 88 mm</h3>
+<p><span class="k">Canon</span> (60 obus) : en <b>surface</b>, cible ≤ 1 600 m, précision selon la distance. 4-6 obus coulent un cargo. Très bruyant. Détruit aussi les infrastructures portuaires.</p>
+<h3>Leurre Bold</h3>
+<p><span class="k">Leurre</span> (4) : en plongée, largue un rideau de bulles — l'Asdic ennemi accroche le <b>faux écho</b> ~40 s. Larguez, virez, coupez tout.</p>
+<h3>Mines</h3>
+<p>Scénario Mouillage de mines : elles se posent automatiquement dans le chenal marqué (8-40 m, lent). Vos mines sont inoffensives pour vous.</p>
+
+<h2 id="hydro">6. L'hydrophone</h2>
+<p>Votre vraie arme de détection (plongée uniquement, vitesse &lt; ~6 nd). Deux niveaux :</p>
+<ul>
+<li><b>Rapports de l'opérateur</b> (automatiques) : lignes vertes pâles sur la carte — direction <b>approximative et dérivante</b>, sans distance.</li>
+<li><b>Écoute fine</b> : orientez l'aiguille cyan (<span class="k">◄ Écoute / Écoute ►</span>) sur un contact — la ligne devient <b>vive et exacte</b> (« contact FORT/faible ») et vous <b>entendez</b> le battement d'hélices, qui s'accélère avec la proximité.</li>
+</ul>
+<div class="box">Méfiez-vous des <b>baleines</b> : elles chantent comme un contact faible. En approchant, l'opérateur tranche. Pendant une chasse, une baleine proche peut même capter l'écho Asdic à votre place.</div>
+
+<h2 id="survie">7. Survivre au grenadage</h2>
+<p>Les grenades sont réglées sur votre <b>profondeur estimée au largage</b> (paliers 15-210 m) et mettent du temps à couler (~5 m/s). Les dégâts dépendent surtout de l'<b>écart</b> entre votre profondeur réelle et la profondeur d'éclatement.</p>
+<ul>
+<li>Dès les « plouf » : <b>changez de profondeur</b> (40-50 m d'écart = presque rien) <b>et de cap</b>.</li>
+<li>Les escortes chassent <b>en équipe</b> : le tueur fonce, le pointeur tient le contact à 850 m et pingue. Elles <b>anticipent votre route</b> — ne fuyez jamais droit.</li>
+<li>Contact perdu ≠ partie gagnée : elles <b>quadrillent</b> 60-120 s. Silence, immobilité, couche, leurre.</li>
+<li>Réparations : aux Postes, <b>priorisez</b> (voie d'eau ? incendie ?). Blessés et moral bas ralentissent l'équipe.</li>
+</ul>
+
+<h2 id="ressources">8. Air, gazole, batterie, équipage</h2>
+<table>
+<tr><th>Ressource</th><th>Règle</th></tr>
+<tr><td class="k">Air (CO₂)</td><td>~10 min réelles en plongée (le feu l'aggrave). Ventilation rapide en surface. Schnorchel : ventile/recharge à l'immersion périscopique.</td></tr>
+<tr><td class="k">Gazole</td><td>Consommé par les diesels seuls (surface). Quasi quadratique : « Rapide » vide les soutes en ~25 min réelles, « Lente » dure des heures. Panne sèche → électriques → dérive.</td></tr>
+<tr><td class="k">Batterie</td><td>Vidée en plongée (selon vitesse), rechargée aux diesels. À plat : vitesse réduite.</td></tr>
+<tr><td class="k">Équipage</td><td>Blessés (grenadages violents) et moral &lt; 40 % : réparations ralenties, voix paniquées. Le moral remonte au calme.</td></tr>
+</table>
+
+<h2 id="aviation">9. La menace aérienne</h2>
+<ul>
+<li>Un avion qui vous voit <b>transmet votre position aux escortes</b>.</li>
+<li>La nuit, il voit mal… jusqu'au <b>Leigh Light</b> (1943+) : projecteur au dernier moment, attaque aggravée.</li>
+<li><b>Metox</b> (chantier) : alerte radar quand un avion approche, même en plongée.</li>
+<li><b>CVE</b> (porte-avions d'escorte, fin de guerre) : aviation quasi permanente tant qu'il flotte — 14 000 t à qui le coule.</li>
+<li><b>CAM-ship</b> : certains convois catapultent un unique chasseur quand vous êtes démasqué.</li>
+<li>Réflexe : <b>⚡ Plongée</b>. Sous 6 m, l'avion ne vous entend plus — et vous non plus.</li>
+</ul>
+
+<h2 id="scenarios">10. Les 15 scénarios</h2>
+<table>
+<tr><th>Scénario</th><th>Situation &amp; conseil</th></tr>
+<tr><td class="a">Loup solitaire</td><td>1 cargo, 1 escorte. L'école du tir.</td></tr>
+<tr><td class="a">Convoi côtier</td><td>Cargos + escortes près d'une côte (mines possibles). Gare aux hauts-fonds.</td></tr>
+<tr><td class="a">Convoi de l'Atlantique</td><td>Le classique : gros convoi escorté. Approche à l'hydrophone, attaque de nuit.</td></tr>
+<tr><td class="a">Meute (Rudeltaktik)</td><td>2 U-Boots alliés attaquent avec vous. Profitez de leurs diversions ; seul votre tonnage compte.</td></tr>
+<tr><td class="a">Paukenschlag</td><td>Côte américaine 1942, villes éclairées, cargos feux allumés, aucune défense… au début. Le paradis des as.</td></tr>
+<tr><td class="a">Survivre</td><td>3 escortes sur vous, aviation en l'air : tenez 15 min réelles. Tout votre arsenal défensif, d'un coup.</td></tr>
+<tr><td class="a">Mouillage de mines</td><td>Poser 8 mines dans le chenal (8-40 m, lent), un patrouilleur rôde. Une victime saute plus tard (+5 200 t).</td></tr>
+<tr><td class="a">Attaque de port</td><td>Rade de nuit : navires au mouillage, dépôt de carburant (explosion en chaîne), grues — au canon, sous le feu de la batterie côtière.</td></tr>
+<tr><td class="a">Golfe du Saint-Laurent</td><td>Chenal fluvial, fond 30-60 m (pas de couche !), courant, trafic sans escorte, aviation. Terrain mortel, proies faciles.</td></tr>
+<tr><td class="a">Pénétration de mouillage</td><td>Nuit, baie fermée, passe étroite au sud : un cuirassé (28 000 t) et un croiseur au mouillage. Entrer, frapper, ressortir.</td></tr>
+<tr><td class="a">Opération commando</td><td>Surface, machines stoppées, 90 s au point marqué, sans se faire voir. Prime 4 000 t.</td></tr>
+<tr><td class="a">Vache à lait</td><td>Rallier le U-tanker, 60 s à couple en surface : ravitaillement complet (torpilles, gazole, air…). Avions très fréquents — Enigma est lu. Puis un convoi arrive.</td></tr>
+<tr><td class="a">Duel au mort</td><td>Un destroyer vous traque d'emblée. Le tuer ou mourir.</td></tr>
+<tr><td class="a">Biber</td><td>Sous-marin de poche : 1 torpille, 20 m max, air ×4. Un cargo au mouillage. Une chance.</td></tr>
+<tr><td class="a">Prüfstand XII 🔒</td><td>Débloqué à 100 000 t : remorquer le conteneur V2 (vitesse Lente) au point de tir, surface 2 min, lancement. Prime 15 000 t.</td></tr>
+</table>
+
+<h2 id="campagne">11. La campagne 1940-1945</h2>
+<p>Le bouton <b class="k">⚔ CAMPAGNE</b> en tête du menu. Vous démarrez en <b>1940</b> ; chaque <b>2 patrouilles réussies</b>, la guerre avance d'un an — et la technologie alliée avec :</p>
+<table>
+<tr><th>Année</th><th>Conditions</th></tr>
+<tr><td>1940</td><td>« Le Temps heureux » : Asdic court, escortes lentes, <b>aucun avion</b>.</td></tr>
+<tr><td>1941</td><td>La riposte s'organise : aviation rare.</td></tr>
+<tr><td>1942</td><td>Drumbeat : conditions standard.</td></tr>
+<tr><td>1943</td><td>Le tournant : Leigh Light, escortes +1 nd, CVE possibles, quadrillages longs.</td></tr>
+<tr><td>1944-45</td><td>« La mer est à eux » : Asdic 2 600 m, escortes +2 nd, aviation omniprésente.</td></tr>
+</table>
+<p><b class="r">La mort termine la campagne</b> à votre année (« Fin de carrière, 1943 »). Traverser les 12 patrouilles : 🏁 victoire. Le tonnage alimente la carrière et le chantier normalement.</p>
+
+<h2 id="chantier">12. Le chantier naval</h2>
+<p>Bouton <span class="k">⚙ Chantier</span> (menu ou fin de patrouille). Votre crédit = tonnage de carrière − déjà dépensé. Les achats sont permanents :</p>
+<table>
+<tr><th>Amélioration</th><th>Coût</th><th>Effet</th></tr>
+<tr><td>Hydrophones perfectionnés</td><td>18 000 t</td><td>Portée +25 %, relèvements bien plus précis.</td></tr>
+<tr><td>Détecteur Metox</td><td>20 000 t</td><td>Alerte radar avion, même en plongée.</td></tr>
+<tr><td>Batteries améliorées</td><td>20 000 t</td><td>Autonomie électrique +35 %, recharge +30 %.</td></tr>
+<tr><td>Torpilles FaT</td><td>25 000 t</td><td>Un tir sans solution serpente dans le convoi.</td></tr>
+<tr><td>Type IX</td><td>30 000 t</td><td>+6 torpilles de réserve, gazole −30 %.</td></tr>
+<tr><td>Coque renforcée</td><td>35 000 t</td><td>Écrasement à 240 m, grenades −15 %.</td></tr>
+<tr><td>Schnorchel</td><td>45 000 t</td><td>Recharge et ventile à l'immersion périscopique.</td></tr>
+<tr><td>Revêtement Alberich</td><td>50 000 t</td><td>Échos Asdic ennemis amortis (~40 %).</td></tr>
+<tr><td>Torpille acoustique T5</td><td>60 000 t</td><td>Salve = torpille qui poursuit l'escorte.</td></tr>
+</table>
+
+<h2 id="missions">13. Ordres du BdU &amp; événements</h2>
+<p>En patrouille libre (convois), la radio peut assigner une mission avec <b>prime</b> : couler le <b>transport de troupes</b> du convoi (3 000 t), <b>rapport météo</b> (2 min en surface au point marqué, 2 500 t), <b>cargo isolé</b> (2 000 t — mais ~1 sur 3 est un <b class="r">Q-ship</b> piégé : approchez-le en plongée).</p>
+<p>Événements en cours de route (≤ 3) : escorte de <b>renfort</b>, <b>avarie machine</b> (vitesse bridée 60-100 s), <b>météo changeante</b>, <b>renseignement</b> (convoi signalé). Et l'Atlantique vit : <b>neutres</b> éclairés (les couler = zéro tonnage, moral −15, réprimande), <b>pêcheurs</b> qui peuvent vous signaler, <b>baleines</b>, <b>naufragés</b> dans les canots.</p>
+
+<h2 id="carriere">14. Carrière, journal, sauvegarde</h2>
+<ul>
+<li><b>Carrière</b> : tonnage cumulé → grades et médailles ; statistiques (plus long tir, grenades essuyées, meilleure patrouille) au <span class="k">📖 Journal</span>.</li>
+<li><b>Journal de quart</b> (📜 sur la carte) : tous les messages de la patrouille, horodatés.</li>
+<li><b>Sauvegarde automatique</b> toutes les ~4 s : « ▶ Reprendre la patrouille » au menu, même après fermeture.</li>
+<li><b>⚓ Rentrer à la base</b> : clôt la patrouille, crédite le tonnage, compte une patrouille.</li>
+<li><b>↺ Réinit.</b> (menu) : efface tout — carrière, journal, chantier, campagne, sauvegarde — avec confirmation.</li>
+</ul>
+
+<h2 id="tactiques">15. Dix conseils de vieux loup</h2>
+<ul>
+<li>1. <b>Attaquez de nuit, sans lune, par mer formée</b> : sillages invisibles, Asdic sourd, veilleurs aveugles.</li>
+<li>2. <b>Approchez à l'hydrophone</b>, périscope d'attaque, quelques secondes d'observation, et replongez.</li>
+<li>3. <b>Le pétrolier d'abord</b> (9-12 000 t), le transport si le BdU l'ordonne.</li>
+<li>4. Après le tir, <b>plongez sous la couche et changez de cap</b> — une escorte remontera votre sillage.</li>
+<li>5. Sous grenadage : <b>ploufs = changez de profondeur</b>, franchement.</li>
+<li>6. Le <b>leurre Bold</b> + machines stoppées, c'est une seconde vie. Vous en avez quatre.</li>
+<li>7. <b>Gérez le gazole comme votre vie</b> : « Rapide » est un luxe, la plongée est gratuite.</li>
+<li>8. Ne faites jamais surface sous un ciel qui a porté un avion il y a moins de deux minutes.</li>
+<li>9. <b>Identifiez avant de tirer</b> : un neutre coulé ne rapporte rien et démoralise le bord.</li>
+<li>10. Le tonnage ne sert à rien par 300 m de fond. <b>Savoir rompre le combat est la première vertu du commandant.</b></li>
+</ul>
+
+<p class="d" style="margin-top:30px;border-top:1px solid #1c241e;padding-top:12px">
+U-Boot — Chasse en Atlantique · guide établi pour la build v59 · Gute Jagd, Herr Kaleun.</p>
+<a class="top" href="#haut">▲ retour au sommaire</a>
+</main>
+</body>
+</html>
