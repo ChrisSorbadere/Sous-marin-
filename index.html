@@ -402,7 +402,20 @@ const SND_FILES={
   coque:     ["coque.mp3","Grincements_coque.mp3"],
   explosurf: ["explosion_surface.mp3","Explosion_navire_surface.mp3"],
   helices:   ["helices.mp3","Navires_Surface.mp3"],
-  torprun:   ["torprun.mp3","Torpille.mp3"]
+  torprun:   ["torprun.mp3","Torpille.mp3"],
+  voie_eau:  ["voie_eau.mp3"],
+  incendie:  ["incendie.mp3"],
+  canon:     ["canon.mp3"],
+  chasse:    ["chasse.mp3"],
+  morse:     ["morse.mp3"],
+  cloche:    ["cloche.mp3"],
+  ambiance:  ["ambiance.mp3"],
+  vx_alarm:  ["vx_alarm.mp3"],
+  vx_los:    ["vx_los.mp3"],
+  vx_wabos:  ["vx_wabos.mp3"],
+  vx_auftauchen: ["vx_auftauchen.mp3"],
+  ressac:    ["ressac.mp3"],
+  tempete:   ["tempete.mp3"]
 };
 const SND_TOTAL=Object.keys(SND_FILES).length;
 function updateSndStat(){
@@ -454,7 +467,7 @@ function startLoops(){
     const s=AC.createBufferSource(), g=AC.createGain();
     s.buffer=buf; s.loop=true; g.gain.value=0; s.connect(g).connect(dest()); s.start();
     return {gain:g.gain, rate:s.playbackRate}; };
-  loops={ diesel:mk(SND.diesel), electrique:mk(SND.electrique), mer:mk(SND.mer), helices:mk(SND.helices) };
+  loops={ diesel:mk(SND.diesel), electrique:mk(SND.electrique), mer:mk(SND.mer), helices:mk(SND.helices), ambiance:mk(SND.ambiance), voie_eau:mk(SND.voie_eau), incendie:mk(SND.incendie), ressac:mk(SND.ressac), tempete:mk(SND.tempete) };
 }
 addEventListener("pointerdown",()=>audio(),{once:true});
 function vibrate(p){ if(muted||!navigator.vibrate) return; try{ navigator.vibrate(p); }catch(e){} }
@@ -477,7 +490,15 @@ function ping(freq,vol){ if(!play("sonar", vol!=null?Math.min(1,vol*4):.9, true)
 function boom(){ if(!play("explosion",1,true)) tone(150,.6,.5,"sine",42); }
 function klaxon(){ if(!play("klaxon",.9,false)){ tone(430,.14,.32,"sawtooth"); setTimeout(()=>tone(320,.14,.4,"sawtooth"),330);} }
 function launchSfx(){ if(!play("torpille",.9,false)) tone(900,.12,.5,"sawtooth",300); play("torprun",.5,false); }
-let planeSnd=null;
+let planeSnd=null, vxNode=null, vxT=0;
+function crew(name,vol){
+  const ac=audio(); if(!ac||!SND[name]) return;
+  if(vxNode && AC.currentTime<vxT){ return; }        // don't stack shouts
+  const s=ac.createBufferSource(), g=ac.createGain();
+  s.buffer=SND[name]; g.gain.value=vol==null?1:vol;
+  s.connect(g).connect(dest()); s.start();
+  vxNode=s; vxT=AC.currentTime + SND[name].duration - 0.1;
+}
 function planeSfx(){ planeSnd=play("avion",.7,false)||null; }
 function splashSfx(){ play("grenade",.7,true); }
 function surfBoom(){ if(!play("explosurf",1,true)) boom(); }
@@ -511,6 +532,8 @@ function engineStop(){                       // menu / game over: fade every amb
   if(!AC||!loops) return; const tc=AC.currentTime;
   loops.diesel.gain.setTargetAtTime(0,tc,.4); loops.electrique.gain.setTargetAtTime(0,tc,.4);
   loops.mer.gain.setTargetAtTime(0,tc,.6); loops.helices.gain.setTargetAtTime(0,tc,.6);
+  loops.ambiance.gain.setTargetAtTime(0,tc,.6); loops.voie_eau.gain.setTargetAtTime(0,tc,.4); loops.incendie.gain.setTargetAtTime(0,tc,.4);
+  loops.ressac.gain.setTargetAtTime(0,tc,.5); loops.tempete.gain.setTargetAtTime(0,tc,.6);
 }
 function engineSet(vel,surf){
   const ac=audio(); if(!ac||!loops) return; const tc=ac.currentTime;
@@ -518,7 +541,11 @@ function engineSet(vel,surf){
   const moving = vel>0.15;
   loops.diesel.gain.setTargetAtTime( surf&&moving ? 0.18+sp*0.5 : 0, tc, .3);
   loops.electrique.gain.setTargetAtTime( !surf&&moving ? 0.10+sp*0.35 : (!surf?0.03:0), tc, .3);
-  loops.mer.gain.setTargetAtTime( surf ? 0.5 : 0.06, tc, .5);   // waves loud at the surface, muffled below
+  const sea=(G&&G.env)?G.env.weather.sea:0.2;
+  loops.mer.gain.setTargetAtTime( surf ? 0.32+sea*0.5 : 0.05+sea*0.04, tc, .5);   // sea state drives the swell
+  loops.mer.rate && loops.mer.rate.setTargetAtTime(0.9+sea*0.25, tc, .6);
+  loops.ressac.gain.setTargetAtTime( surf ? clamp((sea-0.3)*0.9,0,0.6) : 0, tc, .5);   // waves on the hull
+  loops.tempete.gain.setTargetAtTime( surf ? clamp((sea-0.45)*0.9,0,0.55) : 0, tc, .6);  // storm windrface, muffled below
   if(loops.diesel.rate) loops.diesel.rate.setTargetAtTime(0.9+sp*0.35, tc, .3);
   if(loops.electrique.rate) loops.electrique.rate.setTargetAtTime(0.9+sp*0.3, tc, .3);
 }
@@ -1206,7 +1233,9 @@ function updatePlanes(dt){
 
 /* ---------- messages ---------- */
 const logEl=$("#log");
+function radioBeep(txt){ if(/BdU|Radio|renseignement|convoi signalé/i.test(txt)) play("morse",.5,false); }
 function say(txt,cls=""){
+  radioBeep(txt);
   const d=document.createElement("div");
   d.className="msg "+cls; d.textContent=txt;
   logEl.appendChild(d);
@@ -1386,12 +1415,12 @@ $("#bPeri").onclick=function(){
 $("#bCrash").onclick=()=>{
   const s=G.sub; if(!s) return;
   s.tDepth=Math.max(s.depth,55); s.crashT=6;
-  klaxon(); vibrate([0,90,50,90]); say("PLONGÉE D'URGENCE !","alarm");
+  klaxon(); crew("vx_alarm",.95); vibrate([0,90,50,90]); say("PLONGÉE D'URGENCE !","alarm");
 };
 $("#bBlow").onclick=()=>{
   const s=G.sub; if(!s) return;
   s.tDepth=0; s.blowT=6; s.detSpike=(s.detSpike||0)+14;      // roaring air = noise
-  klaxon(); vibrate(60); say("Chasse rapide — on remonte !","alarm");
+  play("chasse",.8,false); crew("vx_auftauchen",.95); klaxon(); vibrate(60); say("Chasse rapide — on remonte !","alarm");
 };
 $("#bMute").onclick=()=>setMute(!muted);
 setMute(muted);
@@ -1426,7 +1455,7 @@ function fireGun(){
   if(!tgt || best>1600){ say("Canon : aucune cible à portée (1 600 m).","cmd"); return; }
   G.gunT=1.4; G.shells--;
   s.detSpike=(s.detSpike||0)+8; G.det=clamp(G.det+6,0,100);   // gunfire is VERY loud
-  play("explosion",.35,false,1.7)||0; vibrate(30);
+  if(!play("canon",.9,false)) play("explosion",.35,false,1.7); vibrate(30);
   const pHit=clamp(1-best/1800,0.2,0.9);
   if(Math.random()<pHit){
     tgt.hp=(tgt.hp||4)-1;
@@ -1494,7 +1523,7 @@ function fireOne(){
   if(!tube){ say("Tous les tubes sont vides.","cmd"); return; }
   launchTorp(firingAim());
   tube.loaded=false; startReload(tube);
-  say("Torpille lancée !"+(s.tdc.on&&s.tdc.valid?" (solution TDC)":""),"alarm"); launchSfx();
+  say("Torpille lancée !"+(s.tdc.on&&s.tdc.valid?" (solution TDC)":""),"alarm"); launchSfx(); crew("vx_los",.9);
   updateFireBtn();
 }
 function fireT5(){
@@ -1903,6 +1932,11 @@ function step(dt){
   // ---- audio ambience ----
   if(planeSnd && s.depth>=6){ try{ planeSnd.stop(); }catch(e){} planeSnd=null; }  // underwater: no aircraft noise
   engineSet(s.vel, s.depth<4);
+  if(loops){ const tc=AC.currentTime;
+    loops.ambiance.gain.setTargetAtTime(muted?0:0.5, tc, .6);                 // permanent interior hum
+    loops.voie_eau.gain.setTargetAtTime(s.leak>0?clamp(0.25+s.leak*0.25,0,0.8):0, tc, .4);
+    loops.incendie.gain.setTargetAtTime(s.fire>0?clamp(0.3+s.fire*0.3,0,0.85):0, tc, .4);
+  }
   if(G.det>=72){ G.hbT=(G.hbT||0)-dt; if(G.hbT<=0){ heartbeat(); G.hbT=clamp(1.5-G.det*0.007,0.5,1.4); } }
 
   // (no ambient sonar: the U-boat has no ASDIC — only the escorts ping, and only while hunting)
@@ -2081,6 +2115,7 @@ function avoidHazards(c,dt){
     c.hdg=norm(c.hdg + clamp(norm(away-c.hdg),-0.7*dt,0.7*dt)); }
 }
 function dropCharges(c){
+  crew("vx_wabos",.9);
   // depth-charge FUSES: the escort sets them to its ESTIMATE of your depth at drop time.
   // a fresh Asdic fix = tight estimate; then changing depth before they sink & burst saves you.
   const s=G.sub;
@@ -3173,6 +3208,8 @@ function hud(){
   // what the CREW can actually tell: pings on the hull, screws closing in — not a number
   const hunted=G.contacts.some(c=>c.alive&&c.type==="escort"&&c.state==="hunt");
   const searched=G.contacts.some(c=>c.alive&&c.type==="escort"&&c.state==="search");
+  if(hunted && !G._wasHunted){ play("cloche",.7,false); }        // action-stations bell
+  G._wasHunted=hunted;
   const alertTxt = hunted?"ACCROCHÉ":searched?"TRAQUE":"R.A.S.";
   $("#sDet").textContent=alertTxt;
   $("#sDet").style.fontSize="12px";
@@ -3356,7 +3393,7 @@ function showBrief(){
       <a href="./guide.html" target="_blank" style="color:var(--phos);font-size:11.5px;letter-spacing:.06em">📘 Guide du commandant</a>
     </div>
     <div id="sndStat" style="text-align:center;margin-top:4px;font-size:10px;color:var(--txt-dim)"></div>
-    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v59</div>
+    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v62</div>
     ${COMMON_HINT}`;
   updateSndStat();
   const list=card.querySelector("#scenList");
