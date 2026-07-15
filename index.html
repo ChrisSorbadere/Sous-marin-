@@ -2483,12 +2483,29 @@ function drawDepthGauge(cx,w,h,s){
     cx.beginPath(); cx.moveTo(x,y); cx.lineTo(x+7*DPR,y); cx.stroke();
     cx.fillText(d+"", x+10*DPR, y+3*DPR);
   }
-  const y=top+span*clamp(s.depth/MX,0,1);
-  cx.fillStyle= s.depth>crushDepth()?"#e0533a":"#e8b94a";
-  cx.beginPath(); cx.moveTo(x-3*DPR,y); cx.lineTo(x+14*DPR,y-4*DPR); cx.lineTo(x+14*DPR,y+4*DPR); cx.fill();
+  // target-depth marker (green): where the helm is heading
   const yt=top+span*clamp(s.tDepth/MX,0,1);
-  cx.strokeStyle="#5ff08a"; cx.lineWidth=1.5*DPR;
-  cx.beginPath(); cx.moveTo(x-2*DPR,yt); cx.lineTo(x+16*DPR,yt); cx.stroke();
+  cx.strokeStyle="#5ff08a"; cx.lineWidth=1.5*DPR; cx.setLineDash([3*DPR,3*DPR]);
+  cx.beginPath(); cx.moveTo(x-2*DPR,yt); cx.lineTo(x+26*DPR,yt); cx.stroke(); cx.setLineDash([]);
+  // depth needle (amber): damped, chases the true depth with a little overshoot — a live instrument
+  if(G._needleDepth==null) G._needleDepth=s.depth;
+  G._needleDepth += (s.depth-G._needleDepth)*0.10;
+  const osc=Math.sin(G.t*8)*Math.abs(s.depth-G._needleDepth)*0.5 + needleJitter(s)*180;
+  const nd=clamp(G._needleDepth+osc,0,MX);
+  const y=top+span*(nd/MX);
+  const crush=s.depth>crushDepth();
+  // needle line across the gauge + arrow head
+  cx.strokeStyle= crush?"#e0533a":"#e8b94a"; cx.lineWidth=2*DPR;
+  cx.beginPath(); cx.moveTo(x-4*DPR,y); cx.lineTo(x+30*DPR,y); cx.stroke();
+  cx.fillStyle= crush?"#e0533a":"#e8b94a";
+  cx.beginPath(); cx.moveTo(x+30*DPR,y); cx.lineTo(x+22*DPR,y-6*DPR); cx.lineTo(x+22*DPR,y+6*DPR); cx.fill();
+  // glowing knob at the pivot
+  cx.shadowColor= crush?"#e0533a":"#e8b94a"; cx.shadowBlur=8*DPR;
+  cx.beginPath(); cx.arc(x-4*DPR,y,3.5*DPR,0,TAU); cx.fill();
+  cx.shadowBlur=0;
+  // live depth readout riding the needle
+  cx.fillStyle= crush?"#e0533a":"#e8b94a"; cx.font=`bold ${11*DPR}px monospace`; cx.textAlign="left";
+  cx.fillText(Math.round(s.depth)+" m", x+34*DPR, y+4*DPR);
 }
 function needleJitter(s){
   const eng=(s.vel/17.6)*0.012, shk=(G.shakeT>0?G.shakeT*0.05:0);
@@ -3462,7 +3479,7 @@ function showBrief(){
       <a href="./guide.html" target="_blank" style="color:var(--phos);font-size:11.5px;letter-spacing:.06em">📘 Guide du commandant</a>
     </div>
     <div id="sndStat" style="text-align:center;margin-top:4px;font-size:10px;color:var(--txt-dim)"></div>
-    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v64</div>
+    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v65</div>
     ${COMMON_HINT}`;
   updateSndStat();
   const list=card.querySelector("#scenList");
