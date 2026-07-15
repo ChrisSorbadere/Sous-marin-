@@ -803,7 +803,7 @@ function updateAllies(dt){
     for(const c of G.contacts){ if(c.alive&&c.type==="cargo"){ const d=dist(a.x,a.y,c.x,c.y); if(d<bd){bd=d;tgt=c;} } }
     if(!tgt){ a.hdg=norm(a.hdg+0.02*dt); a.x+=Math.cos(a.hdg)*a.spd*KN*dt; a.y+=Math.sin(a.hdg)*a.spd*KN*dt; continue; }
     const want=angTo(a.x,a.y,tgt.x,tgt.y);
-    a.hdg=norm(a.hdg+clamp(norm(want-a.hdg),-0.12*dt,0.12*dt));
+    a.hdg=norm(a.hdg+clamp(norm(want-a.hdg),-0.06*dt,0.06*dt));
     const hold = bd<1500;                            // keep attack distance
     a.x+=Math.cos(a.hdg)*(hold?a.spd*0.4:a.spd)*KN*dt;
     a.y+=Math.sin(a.hdg)*(hold?a.spd*0.4:a.spd)*KN*dt;
@@ -1823,20 +1823,20 @@ function step(dt){
       if(c.loner && !c.sinking){                      // neutrals & fishermen wander their own way
         c.wT=(c.wT||0)-dt;
         if(c.wT<=0){ c.wT=25+Math.random()*30; c.wHdg=norm(c.hdg+(Math.random()-.5)*1.2); }
-        c.hdg=norm(c.hdg+clamp(norm((c.wHdg==null?c.hdg:c.wHdg)-c.hdg),-0.15*dt,0.15*dt));
+        c.hdg=norm(c.hdg+clamp(norm((c.wHdg==null?c.hdg:c.wHdg)-c.hdg),-0.04*dt,0.04*dt));
       } else if(c.riverLane && !c.sinking){                 // hold the channel axis
         const axis=c.hdg>0?Math.PI/2:-Math.PI/2;
         const corr=clamp((WORLD*0.5-c.x)/900,-0.5,0.5)*(c.hdg>0?-1:1);
-        c.hdg=norm(c.hdg+clamp(norm(axis+corr-c.hdg),-0.35*dt,0.35*dt));
+        c.hdg=norm(c.hdg+clamp(norm(axis+corr-c.hdg),-0.10*dt,0.10*dt));
       } else if(c.evadeT>0){ c.evadeT-=dt;
-        c.hdg=norm(c.hdg+clamp(norm(c.evHdg-c.hdg),-0.6*dt,0.6*dt));    // hard rudder — comb the tracks
+        c.hdg=norm(c.hdg+clamp(norm(c.evHdg-c.hdg),-0.07*dt,0.07*dt));  // hard rudder — but 8000 tons answer slowly
       } else if(c.sinking){ /* dead in the water */ }
-      else c.hdg=norm(c.hdg+clamp(norm(convoyHdg-c.hdg),-0.4*dt,0.4*dt));   // steer onto the zigzag leg
+      else c.hdg=norm(c.hdg+clamp(norm(convoyHdg-c.hdg),-0.06*dt,0.06*dt));   // steer onto the zigzag leg
       avoidHazards(c,dt);
       if(!c.withdraw){                       // stay in the sector while the fight is on
         const cxm=WORLD/2, edge=Math.min(c.x,WORLD-c.x,c.y,WORLD-c.y);
         if(edge<350){ const inw=angTo(c.x,c.y,cxm,cxm);
-          c.hdg=norm(c.hdg+clamp(norm(inw-c.hdg),-0.5*dt,0.5*dt)); }
+          c.hdg=norm(c.hdg+clamp(norm(inw-c.hdg),-0.08*dt,0.08*dt)); }
       }
       const spdEff = c.sinking?0.4 : (c.evadeT>0?7.2:c.spd);            // flank speed under attack
       const cnx=c.x+Math.cos(c.hdg)*spdEff*KN*dt, cny=c.y+Math.sin(c.hdg)*spdEff*KN*dt;
@@ -1933,7 +1933,7 @@ function step(dt){
   if(planeSnd && s.depth>=6){ try{ planeSnd.stop(); }catch(e){} planeSnd=null; }  // underwater: no aircraft noise
   engineSet(s.vel, s.depth<4);
   if(loops){ const tc=AC.currentTime;
-    loops.ambiance.gain.setTargetAtTime(muted?0:0.5, tc, .6);                 // permanent interior hum
+    loops.ambiance.gain.setTargetAtTime(muted?0:0.38, tc, .6);                 // permanent interior hum
     loops.voie_eau.gain.setTargetAtTime(s.leak>0?clamp(0.25+s.leak*0.25,0,0.8):0, tc, .4);
     loops.incendie.gain.setTargetAtTime(s.fire>0?clamp(0.3+s.fire*0.3,0,0.85):0, tc, .4);
   }
@@ -2023,7 +2023,7 @@ function escortAI(c,dt){
     tx=clamp(ax,40,WORLD-40); ty=clamp(ay,40,WORLD-40);
     const dM=dist(c.x,c.y,s.x,s.y);
     const eb=(G.era?G.era.esc:0);
-    spd = (isKiller ? (dM>1600?18:15) : 10)+eb; turn=0.12;      // destroyers sprint, slow for the Asdic run
+    spd = (isKiller ? (dM>1600?18:15) : 10)+eb; turn=0.075;      // destroyers sprint, slow for the Asdic run
     if(!isKiller && c.asdicT>1.8) c.asdicT=1.8;       // pointers ping twice as often
     // active Asdic: periodic ping; refines fix & spikes detection when in range & above the layer
     c.asdicT=(c.asdicT||0)-dt;
@@ -2039,12 +2039,18 @@ function escortAI(c,dt){
       if(G.nearIce) layer*=0.4;                                        // ice clutter masks the echo
         const stillness = 0.45+0.55*clamp(s.vel/3,0,1);          // a stopped boat is harder to pick out from the seabed
         const ret = clamp(1-dM/eraAsdic(),0,1)*layer*stillness*(1-G.env.weather.sea*0.6)*(hasUpg('alberich')?0.62:1);
-        if(ret>0.25){ c.lkx=s.x+(Math.random()-.5)*120; c.lky=s.y+(Math.random()-.5)*120; c.fixT=4;
+        if(ret>0.25 && dM>280){ c.lkx=s.x+(Math.random()-.5)*120; c.lky=s.y+(Math.random()-.5)*120; c.fixT=4;
           G.det=clamp(G.det+ret*22,0,100); }
+        else if(dM<=280) sayOnce("blind","Il passe à l'attaque — son Asdic est aveugle sous lui : MAINTENANT, barre toute !","cmd");
       }
     }
     c.dcT-=dt;
-    if(dM<340 && c.dcT<=0){ c.dcT=5.5; dropCharges(c); }
+    // she drops on her ESTIMATE (last Asdic fix) — if you moved in her blind spot, the pattern lands behind you
+    if(dist(c.x,c.y,c.lkx,c.lky)<230 && dM<520 && c.dcT<=0){
+      c.dcT=38;                                                  // reload + set up the next attack run
+      dropCharges(c);
+      c.fixT=0;                                                  // contact lost in her own wake — must regain it
+    }
   } else if(c.state==="search"){
     // methodical box search around the last datum
     if(c.fixT<=0){
@@ -2053,7 +2059,7 @@ function escortAI(c,dt){
       c.px=clamp((c.lkx||s.x)+Math.cos(ang)*leg,40,WORLD-40);
       c.py=clamp((c.lky||s.y)+Math.sin(ang)*leg,40,WORLD-40); c.fixT=6;
     }
-    tx=c.px; ty=c.py; spd=10; turn=0.10;
+    tx=c.px; ty=c.py; spd=10; turn=0.06;
     const dM=dist(c.x,c.y,s.x,s.y);
     c.asdicT=(c.asdicT||0)-dt;
     if(dM<eraAsdic() && c.asdicT<=0){ c.asdicT=3.2; ping(900,.09); if(dM<2000) vibrate(22);
@@ -2067,7 +2073,7 @@ function escortAI(c,dt){
   } else if(c.withdraw){
     const ex=c.x<WORLD/2?-100:WORLD+100, ey=c.y<WORLD/2?-100:WORLD+100;
     const toX=Math.min(c.x,WORLD-c.x)<Math.min(c.y,WORLD-c.y);
-    tx=toX?ex:c.x; ty=toX?c.y:ey; spd=12; turn=0.10;
+    tx=toX?ex:c.x; ty=toX?c.y:ey; spd=12; turn=0.06;
     if(c.x<70||c.x>WORLD-70||c.y<70||c.y>WORLD-70){ c.alive=false; }
   } else {
     detLockSaid=false;
@@ -2076,7 +2082,7 @@ function escortAI(c,dt){
       if(c.fixT<=0){ const r=350+Math.random()*1000, a=Math.random()*TAU;
         c.px=clamp((c.lkx||s.x)+Math.cos(a)*r,40,WORLD-40);
         c.py=clamp((c.lky||s.y)+Math.sin(a)*r,40,WORLD-40); c.fixT=5; }
-      tx=c.px; ty=c.py; spd=11; turn=0.08;
+      tx=c.px; ty=c.py; spd=11; turn=0.05;
       const dM=dist(c.x,c.y,s.x,s.y);
       c.asdicT=(c.asdicT||0)-dt;
       if(dM<eraAsdic() && c.asdicT<=0){ c.asdicT=4.5; ping(900,.09); if(dM<2000) vibrate(22);
@@ -2097,7 +2103,7 @@ function escortAI(c,dt){
       else { c.px=clamp(WORLD*0.5+(Math.random()-.5)*WORLD*0.5,40,WORLD-40);
              c.py=clamp(WORLD*0.5+(Math.random()-.5)*WORLD*0.5,40,WORLD-40); c.fixT=7; }
     }
-    if(!G.scenario.duel){ tx=c.px||WORLD*0.5; ty=c.py||WORLD*0.4; spd=8; turn=0.07; }
+    if(!G.scenario.duel){ tx=c.px||WORLD*0.5; ty=c.py||WORLD*0.4; spd=8; turn=0.05; }
   }
   // steer with a limited turn rate — a ship cannot pivot on the spot
   const da=norm(angTo(c.x,c.y,tx,ty)-c.hdg);
@@ -2112,7 +2118,7 @@ function avoidHazards(c,dt){
   const z=G.mineZone; if(!z) return;
   const d=dist(c.x,c.y,z.x,z.y);
   if(d < z.r+300){ const away=angTo(z.x,z.y,c.x,c.y);
-    c.hdg=norm(c.hdg + clamp(norm(away-c.hdg),-0.7*dt,0.7*dt)); }
+    c.hdg=norm(c.hdg + clamp(norm(away-c.hdg),-0.09*dt,0.09*dt)); }
 }
 function dropCharges(c){
   crew("vx_wabos",.9);
@@ -2120,14 +2126,14 @@ function dropCharges(c){
   // a fresh Asdic fix = tight estimate; then changing depth before they sink & burst saves you.
   const s=G.sub;
   const fixAge=clamp(4-(c.fixT||0),0,4);                       // how stale the fix is
-  const err=(18+fixAge*14)*(Math.random()<.5?-1:1)*Math.random();
+  const err=(24+fixAge*16)*(Math.random()<.5?-1:1)*Math.random();
   const STOPS=[15,30,50,70,90,120,150,180,210];                // historical fuse settings
   const want=clamp(s.depth+err,10,220);
   const fuse=STOPS.reduce((a,b)=>Math.abs(b-want)<Math.abs(a-want)?b:a);
   // a PATTERN of three charges laid along the escort's run — moving targets get bracketed
   const drops=[0,1,2].map(i=>({
     x:c.x+Math.cos(c.hdg)*i*95, y:c.y+Math.sin(c.hdg)*i*95,
-    delay:i*650 + fuse*45 }));                                  // ~5 m/s sink rate: time to react
+    delay:i*800 + fuse*60 }));                                  // ~3.7 m/s sink rate: time to react
   for(const d of drops){
     setTimeout(()=>{ if(!G||G.over) return;
       splashSfx(); setTimeout(()=>{ if(G&&!G.over){ boom(); chargeHit(d.x,d.y,fuse); } },450);
@@ -2139,9 +2145,9 @@ function chargeHit(cxp,cyp,fuse){
   const s=G.sub;
   const dM=dist(cxp,cyp,s.x,s.y);
   const dD=Math.abs(s.depth-fuse);                              // vertical miss distance
-  const prox=clamp(1-dM/300,0,1);
+  const prox=clamp(1-dM/220,0,1);
   let depthFactor=clamp(1-dD/50,0,1);                           // burst depth is everything…
-  if(dD<85) depthFactor=Math.max(depthFactor,0.15);             // …but a near-depth burst still shakes the boat
+  if(dD<45) depthFactor=Math.max(depthFactor,0.08);             // …but a near-depth burst still shakes the boat
   if(prox>0.15 && depthFactor<=0 && !G._fuseMsgT){
     say(s.depth>fuse?"Les grenades explosent AU-DESSUS de nous !":"Les grenades explosent SOUS nous !","cmd");
     G._fuseMsgT=1; setTimeout(()=>{ if(G) G._fuseMsgT=0; },4000);
@@ -3393,7 +3399,7 @@ function showBrief(){
       <a href="./guide.html" target="_blank" style="color:var(--phos);font-size:11.5px;letter-spacing:.06em">📘 Guide du commandant</a>
     </div>
     <div id="sndStat" style="text-align:center;margin-top:4px;font-size:10px;color:var(--txt-dim)"></div>
-    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v62</div>
+    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v63</div>
     ${COMMON_HINT}`;
   updateSndStat();
   const list=card.querySelector("#scenList");
