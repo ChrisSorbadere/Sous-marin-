@@ -424,9 +424,9 @@ const SND_FILES={
 const SND_TOTAL=Object.keys(SND_FILES).length;
 function updateSndStat(){
   const el=document.getElementById("sndStat"); if(!el) return;
-  if(!sndReady){ el.textContent="Sons : chargement…"; return; }
-  if(sndOK===SND_TOTAL) el.textContent="🔊 Sons réels : "+sndOK+"/"+SND_TOTAL+" chargés ✓";
-  else el.innerHTML="⚠ Sons "+sndOK+"/"+SND_TOTAL+" chargés — <u>toucher pour le détail</u>";
+  if(!sndReady){ el.textContent="🔊 Sons : chargement…"; }
+  else if(sndOK===SND_TOTAL) el.innerHTML='<span style="color:var(--phos)">🔊 Sons '+sndOK+'/'+SND_TOTAL+' ✓</span> — toucher pour tester';
+  else el.innerHTML='<span style="color:var(--red)">⚠ Sons '+sndOK+'/'+SND_TOTAL+'</span> — toucher pour le détail';
   el.style.cursor="pointer";
   el.onclick=()=>{
     const L=$("#klogList");
@@ -998,6 +998,7 @@ function newGame(scen){
   G.wantCVE = (scen.id==="atlantic"||scen.id==="meute") && Math.random()<cveP;
   if(G.wantCVE) G.air=true;
   G.era = scen.camp ? eraFor(scen.campYear) : null;
+  G.diff = DIFFS[loadDiff()];
   G.terrain = scen.anchorage ? genAnchorage() : scen.river ? genRiver() : genTerrain(scen.coast);
   G.whales=[]; G.rafts=[];
   if(!scen.anchorage && !scen.port && !scen.biber && !scen.duel && !scen.survive){
@@ -1212,8 +1213,8 @@ function spawnPlane(){
   if(e===0){x=-200;y=Math.random()*WORLD;} else if(e===1){x=WORLD+200;y=Math.random()*WORLD;}
   else if(e===2){x=Math.random()*WORLD;y=-200;} else {x=Math.random()*WORLD;y=WORLD+200;}
   const hdg=angTo(x,y, s.x+(Math.random()-.5)*1600, s.y+(Math.random()-.5)*1600);
-  G.planes.push({x,y,hdg,spd:28,state:"patrol",dropT:0,tx:0,ty:0});
-  if(G.sub.depth<6) say("Veille : avion ennemi en vue !","alarm");
+  G.planes.push({x,y,hdg,spd:28/dif().plane,state:"patrol",dropT:0,tx:0,ty:0});
+  if(G.sub.depth<6) say(dif().plane>1.3?"Veille : un point à l'horizon — AVION ! Vous avez le temps de plonger.":"Veille : avion ennemi en vue !","alarm");
   else if(hasUpg('metox')) sayOnce("metox","Metox : émission radar détectée — un avion approche.","alarm");
 }
 function planeAttack(p){
@@ -1873,21 +1874,21 @@ function step(dt){
       if(c.loner && !c.sinking){                      // neutrals & fishermen wander their own way
         c.wT=(c.wT||0)-dt;
         if(c.wT<=0){ c.wT=25+Math.random()*30; c.wHdg=norm(c.hdg+(Math.random()-.5)*1.2); }
-        c.hdg=norm(c.hdg+clamp(norm((c.wHdg==null?c.hdg:c.wHdg)-c.hdg),-0.04*dt,0.04*dt));
+        c.hdg=norm(c.hdg+clamp(norm((c.wHdg==null?c.hdg:c.wHdg)-c.hdg),-0.04*dif().turn*dt,0.04*dif().turn*dt));
       } else if(c.riverLane && !c.sinking){                 // hold the channel axis
         const axis=c.hdg>0?Math.PI/2:-Math.PI/2;
         const corr=clamp((WORLD*0.5-c.x)/900,-0.5,0.5)*(c.hdg>0?-1:1);
-        c.hdg=norm(c.hdg+clamp(norm(axis+corr-c.hdg),-0.10*dt,0.10*dt));
+        c.hdg=norm(c.hdg+clamp(norm(axis+corr-c.hdg),-0.10*dif().turn*dt,0.10*dif().turn*dt));
       } else if(c.leaving && !c.sinking){ /* hold her outbound course off the chart */ }
       else if(c.evadeT>0){ c.evadeT-=dt;
-        c.hdg=norm(c.hdg+clamp(norm(c.evHdg-c.hdg),-0.07*dt,0.07*dt));  // hard rudder — but 8000 tons answer slowly
+        c.hdg=norm(c.hdg+clamp(norm(c.evHdg-c.hdg),-0.07*dif().turn*dt,0.07*dif().turn*dt));  // hard rudder — but 8000 tons answer slowly
       } else if(c.sinking){ /* dead in the water */ }
-      else c.hdg=norm(c.hdg+clamp(norm(convoyHdg-c.hdg),-0.06*dt,0.06*dt));   // steer onto the zigzag leg
+      else c.hdg=norm(c.hdg+clamp(norm(convoyHdg-c.hdg),-0.06*dif().turn*dt,0.06*dif().turn*dt));   // steer onto the zigzag leg
       avoidHazards(c,dt);
       if(!c.withdraw){                       // stay in the sector while the fight is on
         const cxm=WORLD/2, edge=Math.min(c.x,WORLD-c.x,c.y,WORLD-c.y);
         if(edge<350){ const inw=angTo(c.x,c.y,cxm,cxm);
-          c.hdg=norm(c.hdg+clamp(norm(inw-c.hdg),-0.08*dt,0.08*dt)); }
+          c.hdg=norm(c.hdg+clamp(norm(inw-c.hdg),-0.08*dif().turn*dt,0.08*dif().turn*dt)); }
       }
       const spdEff = c.sinking?0.4 : (c.evadeT>0?7.2:c.spd);            // flank speed under attack
       const cnx=c.x+Math.cos(c.hdg)*spdEff*KN*dt, cny=c.y+Math.sin(c.hdg)*spdEff*KN*dt;
@@ -2109,8 +2110,8 @@ function escortAI(c,dt){
     }
     tx=clamp(ax,40,WORLD-40); ty=clamp(ay,40,WORLD-40);
     const dM=dist(c.x,c.y,s.x,s.y);
-    const eb=(G.era?G.era.esc:0);
-    spd = (isKiller ? (dM>1600?18:15) : 10)+eb; turn=0.075;      // destroyers sprint, slow for the Asdic run
+    const eb=(G.era?G.era.esc:0)+dif().esc;
+    spd = (isKiller ? (dM>1600?18:15) : 10)+eb; turn=0.075*Math.max(dif().turn,0.6);      // destroyers sprint, slow for the Asdic run
     if(!isKiller && c.asdicT>1.8) c.asdicT=1.8;       // pointers ping twice as often
     // active Asdic: periodic ping; refines fix & spikes detection when in range & above the layer
     c.asdicT=(c.asdicT||0)-dt;
@@ -2134,7 +2135,7 @@ function escortAI(c,dt){
     c.dcT-=dt;
     // she drops on her ESTIMATE (last Asdic fix) — if you moved in her blind spot, the pattern lands behind you
     if(dist(c.x,c.y,c.lkx,c.lky)<230 && dM<520 && c.dcT<=0){
-      c.dcT=38;                                                  // reload + set up the next attack run
+      c.dcT=38*dif().dc;                                         // reload + set up the next attack run
       dropCharges(c);
       c.fixT=0;                                                  // contact lost in her own wake — must regain it
     }
@@ -2146,7 +2147,7 @@ function escortAI(c,dt){
       c.px=clamp((c.lkx||s.x)+Math.cos(ang)*leg,40,WORLD-40);
       c.py=clamp((c.lky||s.y)+Math.sin(ang)*leg,40,WORLD-40); c.fixT=6;
     }
-    tx=c.px; ty=c.py; spd=10; turn=0.06;
+    tx=c.px; ty=c.py; spd=10; turn=0.06*Math.max(dif().turn,0.6);
     const dM=dist(c.x,c.y,s.x,s.y);
     c.asdicT=(c.asdicT||0)-dt;
     if(dM<eraAsdic() && c.asdicT<=0){ c.asdicT=3.2; ping(900,.09); if(dM<2000) vibrate(22);
@@ -2205,7 +2206,7 @@ function avoidHazards(c,dt){
   const z=G.mineZone; if(!z) return;
   const d=dist(c.x,c.y,z.x,z.y);
   if(d < z.r+300){ const away=angTo(z.x,z.y,c.x,c.y);
-    c.hdg=norm(c.hdg + clamp(norm(away-c.hdg),-0.09*dt,0.09*dt)); }
+    c.hdg=norm(c.hdg + clamp(norm(away-c.hdg),-0.09*dif().turn*dt,0.09*dif().turn*dt)); }
 }
 function dropCharges(c){
   crew("vx_wabos",1.2);
@@ -3567,6 +3568,7 @@ function resumePatrol(){
   if(!G.cities) G.cities=[];
   if(!G.smokes) G.smokes=[];
   if(G.scenario.camp && !G.era) G.era=eraFor(G.scenario.campYear);
+  if(!G.diff) G.diff=DIFFS[loadDiff()];
   if(!G.allies) G.allies=[];
   if(G.scenario.milk && !G.milk) G.milk={x:WORLD/2,y:WORLD/2,t:60,done:true};
   for(const t of G.torps) t.homing=null;           // homing refs don't survive serialization
@@ -3615,6 +3617,17 @@ let UPG_CACHE=null;
 function saveUpg(u){ try{ localStorage.setItem("uboot_upg",JSON.stringify(u)); }catch(e){} UPG_CACHE=null; }
 function hasUpg(id){ if(!UPG_CACHE) UPG_CACHE=loadUpg().owned; return UPG_CACHE.indexOf(id)>=0; }
 function crushDepth(){ return CRUSH + (hasUpg('hull2')?30:0); }
+const DIFFS={
+  recrue:  {id:"recrue",  name:"Recrue",  turn:0.45, esc:-1, plane:2.1, dc:1.35,
+            line:"Navires lourds à la manœuvre, avions annoncés de loin, escortes prudentes."},
+  officier:{id:"officier",name:"Officier",turn:0.70, esc:0,  plane:1.5, dc:1.0,
+            line:"L'équilibre : inertie crédible, préavis correct, chasse sérieuse."},
+  as:      {id:"as",      name:"As",      turn:1.0,  esc:1,  plane:1.0, dc:0.85,
+            line:"Ennemis vifs, avions fondus du soleil, grenadages rapprochés."}
+};
+function loadDiff(){ try{ const d=localStorage.getItem("uboot_diff"); return DIFFS[d]?d:"officier"; }catch(e){ return "officier"; } }
+function saveDiff(d){ try{ localStorage.setItem("uboot_diff",d); }catch(e){} }
+function dif(){ return (G&&G.diff)||DIFFS.officier; }
 const CAMP_KEY="uboot_camp";
 function loadCamp(){ try{ const c=JSON.parse(localStorage.getItem(CAMP_KEY))||{};
   return {y:c.y||1940,p:c.p||0,over:!!c.over}; }catch(e){ return {y:1940,p:0,over:false}; } }
@@ -3658,8 +3671,8 @@ function showBrief(){
     <div style="text-align:center;margin-top:8px">
       <a href="./guide.html" target="_blank" style="color:var(--phos);font-size:11.5px;letter-spacing:.06em">📘 Guide du commandant</a>
     </div>
-    <div id="sndStat" style="text-align:center;margin-top:4px;font-size:10px;color:var(--txt-dim)"></div>
-    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v69</div>
+    <button class="go" id="sndStat" style="width:100%;margin-top:8px;padding:9px 6px;font-size:11.5px"></button>
+    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v71</div>
     ${COMMON_HINT}`;
   updateSndStat();
   const list=card.querySelector("#scenList");
@@ -3672,6 +3685,24 @@ function showBrief(){
       `${snap.scenario?snap.scenario.name:""} · ${(snap.patrolTons||0).toLocaleString("fr")} t · coque ${Math.round(snap.sub.hull)}%</span>`;
     rb.onclick=resumePatrol;
     list.appendChild(rb);
+  }
+  {
+    const row=document.createElement("div");
+    row.style.cssText="display:flex;gap:6px;margin-bottom:10px";
+    const cur=loadDiff();
+    for(const k of ["recrue","officier","as"]){
+      const d=DIFFS[k], b=document.createElement("button");
+      b.className="go"; b.style.cssText="flex:1;padding:8px 4px;font-size:11px;margin:0"+
+        (k===cur?";border:1px solid var(--phos);color:var(--phos)":";opacity:.6");
+      b.textContent=d.name;
+      b.onclick=()=>{ saveDiff(k); showBrief(); };
+      row.appendChild(b);
+    }
+    list.appendChild(row);
+    const dl=document.createElement("div");
+    dl.style.cssText="font-size:10.5px;color:var(--txt-dim);margin:-4px 0 10px;text-align:center";
+    dl.textContent=DIFFS[cur].line;
+    list.appendChild(dl);
   }
   {
     const camp=loadCamp(), era=eraFor(camp.y);
