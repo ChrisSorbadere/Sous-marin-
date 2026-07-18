@@ -428,7 +428,22 @@ function updateSndStat(){
   if(sndOK===SND_TOTAL) el.textContent="🔊 Sons réels : "+sndOK+"/"+SND_TOTAL+" chargés ✓";
   else el.innerHTML="⚠ Sons "+sndOK+"/"+SND_TOTAL+" chargés — <u>toucher pour le détail</u>";
   el.style.cursor="pointer";
-  el.onclick=()=>{ const lines=Object.entries(sndDiag).map(([k,v])=>k+" : "+v).join("\n");
+  el.onclick=()=>{
+    const L=$("#klogList");
+    $("#klog .klogCard h2").textContent="Diagnostic des sons — toucher pour écouter";
+    L.innerHTML=Object.keys(SND_FILES).map(k=>{
+      const ok=!!SND[k];
+      return `<div class="kl" data-snd="${k}" style="cursor:pointer">`+
+             `<b style="color:${ok?"var(--phos)":"var(--red)"}">${ok?"✓":"✗"}</b>`+
+             `${k}.mp3 ${ok?"":" — <span style='color:var(--red)'>ABSENT (à pousser à la racine du dépôt)</span>"}</div>`;
+    }).join("");
+    L.querySelectorAll("[data-snd]").forEach(d=>{ d.onclick=()=>{ const k=d.dataset.snd;
+      if(!SND[k]) return;
+      audio(); const src=AC.createBufferSource(), g=AC.createGain(); g.gain.value=1;
+      src.buffer=SND[k]; src.connect(g).connect(master); src.start(); duck(SND[k].duration); }; });
+    $("#klog").classList.remove("hide");
+    return;
+    const lines=Object.entries(sndDiag).map(([k,v])=>k+" : "+v).join("\n");
     alert("Diagnostic des sons\n(base : "+location.href.replace(/[^/]*$/,'')+")\n\n"+(lines||"aucune info")); };
 }
 function audio(){
@@ -1225,6 +1240,9 @@ function updatePlanes(dt){
   if((G.air&&!(G.era&&G.era.plane===0))||cveUp){ G.planeT-=dt; if(G.planeT<=0 && G.planes.length<1){ spawnPlane();
     let pt=cveUp?80+Math.random()*70:(G.scenario.milk?70+Math.random()*70:200+Math.random()*160);
     if(G.era) pt*=(G.era.plane||1)||1;
+    const nearLand=(G.terrain&&G.terrain.blobs||[]).some(b=>!b.reef&&b.rx>=WORLD*0.4);
+    if(!cveUp && !G.scenario.milk && !nearLand && !G.scenario.river && !G.scenario.drumbeat)
+      pt*=2.6;                                       // the Mid-Atlantic Gap: shore-based air can't reach this far
     G.planeT=pt; } }
   for(const p of G.planes){
     if(p.state==="patrol"){
@@ -1359,7 +1377,8 @@ const MAPV={z:1, cx:WORLD/2, cy:WORLD/2, toWorld:null};
       // a tap: lock the ship nearest the touch (from the last rendered frame)
       const s=G.sub, drawn=G.lastDrawn||[], FOV=curFOV(), half=el.width*0.5;
       let best=null,bd=60*DPR;
-      for(const o of drawn){ const px=half+(o.rel/FOV)*half;
+      for(const o of drawn){ if(o.edge!=null&&o.edge<0.5) continue;
+        const px=half+(o.rel/FOV)*half;
         const d=Math.abs(px-e.offsetX*DPR); if(d<bd){ bd=d; best=o.c; } }
       if(best){ s.tdc.on=true; s.tdc.tgt=best; say("TDC : cible acquise ("+shipLabel(best)+").","cmd"); }
     }
@@ -1383,6 +1402,7 @@ function askConfirm(title,txt,onYes){
   $("#askNo").onclick=()=>$("#ask").classList.add("hide");
 }
 $("#btnKlog").onclick=()=>{
+  $("#klog .klogCard h2").textContent="Journal de quart";
   const L=(G&&G.eventLog)||[];
   $("#klogList").innerHTML = L.length
     ? L.slice().reverse().map(e=>`<div class="kl ${e.cls||""}"><b>${e.h}</b>${e.txt}</div>`).join("")
@@ -3064,9 +3084,10 @@ function drawPeri(){
       const rel=norm(angTo(s.x,s.y,c.x,c.y)-s.scope);
       if(Math.abs(rel)>FOV) continue;
       const dM=dist(s.x,s.y,c.x,c.y);
-      if(dM>visR) continue;                          // beyond visibility: invisible
-      drawn.push({c,dM,rel});
-      if(Math.abs(rel)<Math.abs(cRel)){ cRel=rel; centered={c,dM}; }
+      if(dM>visR*1.18) continue;                     // truly gone
+      const edge=clamp((visR*1.15-dM)/(visR*0.30),0,1);   // melts into the murk between 0.85×visR and 1.15×visR
+      drawn.push({c,dM,rel,edge});
+      if(dM<=visR && Math.abs(rel)<Math.abs(cRel)){ cRel=rel; centered={c,dM}; }
     }
     G.lastDrawn=drawn;
     drawn.sort((a,b)=>b.dM-a.dM);
@@ -3074,7 +3095,7 @@ function drawPeri(){
       const px=half+(o.rel/FOV)*half;
       let scale=clamp(1600/o.dM,0.22,3.2);
       if(o.c.kind==="fisher") scale*=0.35;
-      const fade=clamp(1-(o.dM/visR)*(0.6+fog*0.5),0.05,1); // fade near the limit / in fog
+      const fade=clamp(1-(o.dM/visR)*(0.6+fog*0.5),0.05,1)*(o.edge==null?1:o.edge); // fade near the limit / in fog — and melt at the edge
       const swell = sea*scale*4*DPR*Math.sin(G.t*1.5+o.dM*0.01);
       // foreshortening: angle between the ship's heading and our line of sight
       const asp=norm(o.c.hdg - angTo(s.x,s.y,o.c.x,o.c.y));
@@ -3638,7 +3659,7 @@ function showBrief(){
       <a href="./guide.html" target="_blank" style="color:var(--phos);font-size:11.5px;letter-spacing:.06em">📘 Guide du commandant</a>
     </div>
     <div id="sndStat" style="text-align:center;margin-top:4px;font-size:10px;color:var(--txt-dim)"></div>
-    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v68</div>
+    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v69</div>
     ${COMMON_HINT}`;
   updateSndStat();
   const list=card.querySelector("#scenList");
