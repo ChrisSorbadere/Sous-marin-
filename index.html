@@ -434,6 +434,7 @@ function updateSndStat(){
 function audio(){
   if(!AC){ try{ AC=new (window.AudioContext||window.webkitAudioContext)();
     master=AC.createGain(); master.gain.value=muted?0:1; master.connect(AC.destination);
+    loopBus=AC.createGain(); loopBus.gain.value=1; loopBus.connect(master);
     const len=Math.floor(AC.sampleRate*1.7), ir=AC.createBuffer(2,len,AC.sampleRate);   // convolution reverb
     for(let ch=0;ch<2;ch++){ const d=ir.getChannelData(ch);
       for(let i=0;i<len;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/len,2.6); }
@@ -469,7 +470,7 @@ function startLoops(){
   if(!AC||loops) return;
   const mk=(buf)=>{ if(!buf) return {gain:{setTargetAtTime(){}, value:0}, rate:null};
     const s=AC.createBufferSource(), g=AC.createGain();
-    s.buffer=buf; s.loop=true; g.gain.value=0; s.connect(g).connect(dest()); s.start();
+    s.buffer=buf; s.loop=true; g.gain.value=0; s.connect(g).connect(loopBus||dest()); s.start();
     return {gain:g.gain, rate:s.playbackRate}; };
   loops={ diesel:mk(SND.diesel), electrique:mk(SND.electrique), mer:mk(SND.mer), helices:mk(SND.helices), ambiance:mk(SND.ambiance), voie_eau:mk(SND.voie_eau), incendie:mk(SND.incendie), ressac:mk(SND.ressac), tempete:mk(SND.tempete) };
 }
@@ -491,13 +492,22 @@ function tone(freq,vol,dur,type,slide){ const ac=audio(); if(!ac)return; const t
   g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(vol,t+.01); g.gain.exponentialRampToValueAtTime(.0004,t+dur);
   o.connect(g); g.connect(dest()); if(reverb) g.connect(reverb); o.start(t); o.stop(t+dur+.02); }
 function ping(freq,vol){ if(!play("sonar", vol!=null?Math.min(1,vol*4):.9, true)) tone(760,.14,.5,"sine",560); }
-function boom(){ if(!play("explosion",1,true)) tone(150,.6,.5,"sine",42); }
-function klaxon(){ if(!play("klaxon",.9,false)){ tone(430,.14,.32,"sawtooth"); setTimeout(()=>tone(320,.14,.4,"sawtooth"),330);} }
+function boom(){ duck(1.4); if(!play("explosion",1,true)) tone(150,.6,.5,"sine",42); }
+function klaxon(){ duck(1.2); if(!play("klaxon",.9,false)){ tone(430,.14,.32,"sawtooth"); setTimeout(()=>tone(320,.14,.4,"sawtooth"),330);} }
 function launchSfx(){ if(!play("torpille",.9,false)) tone(900,.12,.5,"sawtooth",300); play("torprun",.5,false); }
+let loopBus=null;
+function duck(sec){                                  // dip the ambience so shouts & blasts cut through
+  if(!loopBus||!AC) return;
+  const t=AC.currentTime;
+  loopBus.gain.cancelScheduledValues(t);
+  loopBus.gain.setTargetAtTime(0.30,t,0.05);
+  loopBus.gain.setTargetAtTime(1,t+(sec||1.2),0.5);
+}
 let planeSnd=null, vxNode=null, vxT=0;
 function crew(name,vol){
   const ac=audio(); if(!ac||!SND[name]) return;
   if(vxNode && AC.currentTime<vxT){ return; }        // don't stack shouts
+  duck(1.6);
   const s=ac.createBufferSource(), g=ac.createGain();
   s.buffer=SND[name]; g.gain.value=vol==null?1:vol;
   s.connect(g).connect(dest()); s.start();
@@ -1336,14 +1346,16 @@ const MAPV={z:1, cx:WORLD/2, cy:WORLD/2, toWorld:null};
   const el=$("#cvPeri"); let pid=null, lx=0, moved=0;
   el.style.touchAction="none";
   el.addEventListener("pointerdown",e=>{ pid=e.pointerId; lx=e.offsetX*DPR; moved=0; });
+  let lastDragT=0;
   el.addEventListener("pointermove",e=>{
     if(e.pointerId!==pid||!G) return;
     const nx=e.offsetX*DPR, dx=nx-lx; lx=nx; moved+=Math.abs(dx);
+    if(Math.abs(dx)>2*DPR) lastDragT=performance.now();            // sweeping, not tapping
     const FOV=curFOV();
     G.sub.scopeRel=norm(G.sub.scopeRel + dx/(el.width*0.5)*FOV);   // drag pans the scope
   });
   const up=e=>{
-    if(e.pointerId===pid && moved<10*DPR && G){
+    if(e.pointerId===pid && moved<10*DPR && performance.now()-lastDragT>180 && G){
       // a tap: lock the ship nearest the touch (from the last rendered frame)
       const s=G.sub, drawn=G.lastDrawn||[], FOV=curFOV(), half=el.width*0.5;
       let best=null,bd=60*DPR;
@@ -1426,12 +1438,12 @@ $("#bPeri").onclick=function(){
 $("#bCrash").onclick=()=>{
   const s=G.sub; if(!s) return;
   s.tDepth=Math.max(s.depth,55); s.crashT=6;
-  klaxon(); crew("vx_alarm",.95); vibrate([0,90,50,90]); say("PLONGÉE D'URGENCE !","alarm");
+  crew("vx_alarm",1.25); setTimeout(()=>{ if(G&&!G.over) klaxon(); },1100); vibrate([0,90,50,90]); say("PLONGÉE D'URGENCE !","alarm");
 };
 $("#bBlow").onclick=()=>{
   const s=G.sub; if(!s) return;
   s.tDepth=0; s.blowT=6; s.detSpike=(s.detSpike||0)+14;      // roaring air = noise
-  play("chasse",.8,false); crew("vx_auftauchen",.95); klaxon(); vibrate(60); say("Chasse rapide — on remonte !","alarm");
+  crew("vx_auftauchen",1.25); play("chasse",.7,false); setTimeout(()=>{ if(G&&!G.over) klaxon(); },1000); vibrate(60); say("Chasse rapide — on remonte !","alarm");
 };
 $("#bMute").onclick=()=>setMute(!muted);
 setMute(muted);
@@ -1530,11 +1542,11 @@ function firingAim(){
 function fireOne(){
   audio(); const s=G.sub;
   if(s.depth>20){ say("Lancement impossible : remonte sous 20 m.","cmd"); return; }
-  const tube=s.tubes.find(t=>t.loaded);
-  if(!tube){ say("Tous les tubes sont vides.","cmd"); return; }
+  const tube=s.tubes.find((t,i2)=>t.loaded && i2!==G.dmgTube);
+  if(!tube){ say(G.dmgTube!=null && s.tubes.some(t=>t.loaded) ? "Le seul tube chargé est déformé — impossible de tirer." : "Tous les tubes sont vides.","cmd"); return; }
   launchTorp(firingAim());
   tube.loaded=false; startReload(tube);
-  say("Torpille lancée !"+(s.tdc.on&&s.tdc.valid?" (solution TDC)":""),"alarm"); launchSfx(); crew("vx_los",.9); vibrate(35);
+  say("Torpille lancée !"+(s.tdc.on&&s.tdc.valid?" (solution TDC)":""),"alarm"); launchSfx(); crew("vx_los",1.2); vibrate(35);
   updateFireBtn();
 }
 function fireT5(){
@@ -1543,7 +1555,9 @@ function fireT5(){
   if(loadedTubes()<1){ say("Aucun tube paré.","cmd"); return; }
   let tgt=null,bd=1e9; for(const c of G.contacts){ if(c.alive&&c.type==="escort"){ const d=dist(s.x,s.y,c.x,c.y); if(d<bd){bd=d;tgt=c;} } }
   if(!tgt){ say("T5 : aucune escorte à poursuivre.","cmd"); return; }
-  const ti=s.tubes.findIndex(t=>t.loaded); s.tubes[ti].loaded=false; s.tubes[ti].rt=24;
+  const ti=s.tubes.findIndex((t,i2)=>t.loaded && i2!==G.dmgTube);
+  if(ti<0){ say("Le seul tube chargé est déformé — impossible de tirer.","cmd"); return; }
+  s.tubes[ti].loaded=false; s.tubes[ti].rt=24;
   G.fired++; s.detSpike=(s.detSpike||0)+6;
   G.torps.push({x:s.x+Math.cos(s.hdg)*30,y:s.y+Math.sin(s.hdg)*30,ox:s.x,oy:s.y,hdg:s.hdg,run:0,dead:false,fault:null,premAt:9e9,homing:tgt});
   say("Torpille acoustique T5 lancée — elle chasse l'escorte !","alarm"); launchSfx();
@@ -1707,6 +1721,11 @@ function step(dt){
   const drate = dd>0 ? (s.crashT>0?1.7:0.85)             // diving is slow & deliberate (crash-dive faster)
                      : (s.blowT>0?4.8:3.3);              // blowing tanks lifts fast (escape)
   s.depth += Math.sign(dd)*Math.min(Math.abs(dd),drate*dt) + s.leak*0.7*dt;
+  if(s.tDepth<=0 && s.leak>0){                                  // flooding robs her buoyancy: decks awash
+    G._settle=Math.min((G._settle||0)+dt*0.22, s.leak*1.8);
+    if(s.depth<G._settle) s.depth=G._settle;
+    if(G._settle>2.5) sayOnce("awash","La voie d'eau nous fait enfoncer — le pont est balayé par les vagues.","cmd");
+  } else { G._settle=0; if(s.leak<=0) saidOnce.awash=0; }
 
   // seabed: you cannot pass the bottom, but you may leave it freely
   const seabed=seabedAt(s.x,s.y);
@@ -1743,9 +1762,9 @@ function step(dt){
   if(s.periUp && s.depth>PERISCOPE_DEPTH){ s.periUp=false; $("#bPeri").classList.remove("on"); $("#bPeri").textContent="Périscope ▲"; }
 
   // tube reloading
-  for(const tube of s.tubes){
-    if(!tube.loaded && tube.rt>0){ tube.rt-=dt; if(tube.rt<=0){ tube.loaded=true; updateFireBtn(); say("Tube rechargé.","cmd"); } }
-  }
+  s.tubes.forEach((tube,ti2)=>{
+    if(!tube.loaded && tube.rt>0 && ti2!==G.dmgTube){ tube.rt-=dt; if(tube.rt<=0){ tube.loaded=true; updateFireBtn(); say("Tube rechargé.","cmd"); } }
+  });
   // TDC : track the locked target, compute intercept (gyro) solution
   updateTDC(dt);
 
@@ -1839,7 +1858,8 @@ function step(dt){
         const axis=c.hdg>0?Math.PI/2:-Math.PI/2;
         const corr=clamp((WORLD*0.5-c.x)/900,-0.5,0.5)*(c.hdg>0?-1:1);
         c.hdg=norm(c.hdg+clamp(norm(axis+corr-c.hdg),-0.10*dt,0.10*dt));
-      } else if(c.evadeT>0){ c.evadeT-=dt;
+      } else if(c.leaving && !c.sinking){ /* hold her outbound course off the chart */ }
+      else if(c.evadeT>0){ c.evadeT-=dt;
         c.hdg=norm(c.hdg+clamp(norm(c.evHdg-c.hdg),-0.07*dt,0.07*dt));  // hard rudder — but 8000 tons answer slowly
       } else if(c.sinking){ /* dead in the water */ }
       else c.hdg=norm(c.hdg+clamp(norm(convoyHdg-c.hdg),-0.06*dt,0.06*dt));   // steer onto the zigzag leg
@@ -1854,8 +1874,12 @@ function step(dt){
       if(!landAt(cnx,cny)){ c.x=cnx; c.y=cny; } else { c.hdg=norm(c.hdg+0.5); }
       if(c.x<60||c.x>WORLD-60||c.y<60||c.y>WORLD-60){
         if(c.loner && !c.withdraw){ c.wHdg=angTo(c.x,c.y,WORLD/2,WORLD/2); c.hdg=c.wHdg; }
-        else { c.fled=true; c.alive=false; G.escaped++;
+        else if(!c.leaving){ c.leaving=true;                        // she sails off the chart, no vanishing act
+          const ex = c.x<200 ? -1 : c.x>WORLD-200 ? 1 : 0, ey = c.y<200 ? -1 : c.y>WORLD-200 ? 1 : 0;
+          c.hdg = Math.atan2(ey||0.0001, ex||(ey?0.0001:1));          // point her straight off the edge
           if(!c.withdraw) say("Un "+shipLabel(c).toLowerCase()+" s'échappe hors du secteur.","cmd"); } }
+      if(c.leaving && (c.x<-500||c.x>WORLD+500||c.y<-500||c.y>WORLD+500)){
+        c.fled=true; c.alive=false; G.escaped++; }
     } else {
       escortAI(c,dt);
     }
@@ -1903,6 +1927,12 @@ function step(dt){
   }
   if(G.morale!=null && G.morale<100 && G.det<25 && s.leak<=0 && s.fire<=0)
     G.morale=clamp(G.morale+0.15*dt,0,100);
+  if(G.morale!=null && G.morale<25){ G.panicNoiseT=(G.panicNoiseT==null?20:G.panicNoiseT)-dt;
+    if(G.panicNoiseT<=0){ G.panicNoiseT=40+Math.random()*40;
+      s.detSpike=(s.detSpike||0)+8; vibrate(20);
+      say(["Une clé à molette tombe sur le plancher — le bruit court dans la mer.",
+           "Quelqu'un heurte une vanne dans le noir. Tout le bord retient son souffle.",
+           "Un cri étouffé au poste avant — trop fort."][Math.floor(Math.random()*3)],"alarm"); } }
   if(G.morale!=null && G.morale<35){ G.panicT=(G.panicT||0)-dt;
     if(G.panicT<=0){ G.panicT=25+Math.random()*25;
       say(["« On va tous y rester… »","Des sanglots au poste avant.","« Faites-le taire, ce sonar ! »"][Math.floor(Math.random()*3)],"alarm"); } }
@@ -1958,6 +1988,11 @@ function step(dt){
   G.wrecks=G.wrecks.filter(w=>{ w.life-=dt; return w.life>0; });
   G.pings=G.pings.filter(p=>{ p.life-=dt; return p.life>0; });
   if(G.gunT>0) G.gunT-=dt;
+  const crewR=(1-0.10*Math.min(G.wounded||0,3))*(G.morale<40?0.85:1);
+  if(G.dmgScope){ G.dmgScope-=dt*crewR;
+    if(G.dmgScope<=0){ G.dmgScope=0; say("Périscope réaligné — optique claire.","cmd"); } }
+  if(G.dmgTube!=null){ G.dmgTubeT-=dt*crewR;
+    if(G.dmgTubeT<=0){ say("Tube "+(G.dmgTube+1)+" dégagé et rechargeable.","cmd"); G.dmgTube=null; } }
   if(G.shakeT>0) G.shakeT-=dt*1.6;
   if(G.flickT>0) G.flickT-=dt*1.2;
   if(s.depth>170){ G.creakT=(G.creakT||0)-dt;
@@ -1968,6 +2003,13 @@ function step(dt){
       c.reported=true; G.det=clamp(Math.max(G.det,35),0,100);
       say("Le bateau de pêche nous a vus — il va donner l'alerte par radio.","alarm");
     }
+  }
+  G.trailT=(G.trailT==null?6:G.trailT)-dt;
+  if(G.trailT<=0){ G.trailT=6;
+    if(!G.trails) G.trails=[];
+    if((G.sound||[]).length) G.trails.push({t:G.t, bs:G.sound.map(sn=>sn.b)});
+    while(G.trails.length>4) G.trails.shift();
+    G.trails=G.trails.filter(tr=>G.t-tr.t<22);
   }
   updateMission(dt);
   updateEvents(dt);
@@ -2099,7 +2141,7 @@ function escortAI(c,dt){
     const ex=c.x<WORLD/2?-100:WORLD+100, ey=c.y<WORLD/2?-100:WORLD+100;
     const toX=Math.min(c.x,WORLD-c.x)<Math.min(c.y,WORLD-c.y);
     tx=toX?ex:c.x; ty=toX?c.y:ey; spd=12; turn=0.06;
-    if(c.x<70||c.x>WORLD-70||c.y<70||c.y>WORLD-70){ c.alive=false; }
+    if(c.x<-500||c.x>WORLD+500||c.y<-500||c.y>WORLD+500){ c.alive=false; }
   } else {
     detLockSaid=false;
     if(G.scenario.duel){
@@ -2146,7 +2188,7 @@ function avoidHazards(c,dt){
     c.hdg=norm(c.hdg + clamp(norm(away-c.hdg),-0.09*dt,0.09*dt)); }
 }
 function dropCharges(c){
-  crew("vx_wabos",.9);
+  crew("vx_wabos",1.2);
   // depth-charge FUSES: the escort sets them to its ESTIMATE of your depth at drop time.
   // a fresh Asdic fix = tight estimate; then changing depth before they sink & burst saves you.
   const s=G.sub;
@@ -2182,6 +2224,13 @@ function chargeHit(cxp,cyp,fuse){
     s.hull-=dmg; G.chargesTaken=(G.chargesTaken||0)+1;
     G.shakeT=Math.max(G.shakeT||0, clamp(dmg/22,0.35,1.3));
     if(dmg>12) G.flickT=1.3;
+    // localized damage: ONE at a time, close bursts only, the repair gang clears it in time
+    if(dmg>14 && !G.dmgScope && G.dmgTube==null && Math.random()<0.25){
+      if(Math.random()<0.5){ G.dmgScope=100+Math.random()*60;
+        say("Le PÉRISCOPE a pris le choc — l'optique est faussée ! L'équipe s'en occupe.","alarm"); }
+      else { G.dmgTube=Math.floor(Math.random()*4); G.dmgTubeT=120+Math.random()*80;
+        say("Tube "+(G.dmgTube+1)+" DÉFORMÉ par l'explosion — hors service le temps de la réparation.","alarm"); }
+    }
     G.morale=clamp((G.morale==null?100:G.morale)-4,0,100);
     if(dmg>10 && Math.random()<0.3){ G.wounded=(G.wounded||0)+1;
       say("Un homme est blessé ! ("+G.wounded+" blessé"+(G.wounded>1?"s":"")+" à bord)","alarm"); }
@@ -2566,6 +2615,17 @@ function drawMap(){
     cx.fillRect(lx-tw/2-4*DPR,ly-9*DPR,tw+8*DPR,13*DPR);
     cx.fillStyle=col; cx.fillText(txt,lx,ly+1*DPR);
   };
+  function blobPath(b,mult){
+    const seed=(b.x*7.3+b.y*3.1)%TAU, N=26;
+    cx.beginPath();
+    for(let k=0;k<=N;k++){
+      const a=k/N*TAU;
+      const n=1+Math.sin(a*3+seed)*0.10+Math.sin(a*7+seed*2.2)*0.06+Math.sin(a*11+seed*3.7)*0.035;
+      const vx=X(b.x)+Math.cos(a)*b.rx*mult*n*sc, vy=Y(b.y)+Math.sin(a)*b.ry*mult*n*sc;
+      k?cx.lineTo(vx,vy):cx.moveTo(vx,vy);
+    }
+    cx.closePath();
+  }
   for(const b of G.terrain.blobs){
     if(b.reef){
       cx.fillStyle="rgba(120,150,90,.14)";
@@ -2575,10 +2635,14 @@ function drawMap(){
       zlabel("⚠ HAUT-FOND", b.x, b.y, "rgba(180,205,120,.85)");
       continue;
     }
-    cx.fillStyle="rgba(40,95,80,.20)";
-    cx.beginPath(); cx.ellipse(X(b.x),Y(b.y),b.rx*b.shoal*sc,b.ry*b.shoal*sc,0,0,TAU); cx.fill();
-    cx.fillStyle="#2c3a24"; cx.strokeStyle="#465a35"; cx.lineWidth=1.5*DPR;
-    cx.beginPath(); cx.ellipse(X(b.x),Y(b.y),b.rx*sc,b.ry*sc,0,0,TAU); cx.fill(); cx.stroke();
+    cx.fillStyle="rgba(40,95,80,.20)";                       // shoal water
+    blobPath(b,b.shoal); cx.fill();
+    cx.strokeStyle="rgba(210,225,235,.35)"; cx.lineWidth=2.2*DPR;   // surf line breaking on the shore
+    blobPath(b,1.035); cx.stroke();
+    cx.fillStyle="#2c3a24"; cx.strokeStyle="#4d6238"; cx.lineWidth=1.5*DPR;
+    blobPath(b,1); cx.fill(); cx.stroke();
+    cx.fillStyle="rgba(20,26,16,.5)";                        // inland relief
+    blobPath(b,0.62); cx.fill();
     zlabel(b.rx>=WORLD*0.4?"CÔTE":"ÎLE", b.x, b.y, "rgba(150,200,140,.9)");
   }
   // minefield danger zone
@@ -2679,17 +2743,27 @@ function drawMap(){
     cx.strokeStyle=`rgba(120,210,255,${a*0.7})`; cx.lineWidth=2*DPR;
     cx.beginPath(); cx.arc(X(p.x),Y(p.y),(1-a)*2400*sc+6*DPR,0,TAU); cx.stroke();
   }
+  // --- hydrophone bearing history: ghost lines showing how contacts drift (their course) ---
+  for(const tr of (G.trails||[])){
+    const age=G.t-tr.t, a=clamp(1-age/22,0,1)*0.16;
+    if(a<=0.015) continue;
+    cx.strokeStyle=`rgba(120,220,160,${a.toFixed(3)})`; cx.lineWidth=1*DPR;
+    for(const b of tr.bs){
+      cx.beginPath(); cx.moveTo(X(s.x),Y(s.y));
+      cx.lineTo(X(s.x+Math.cos(b)*4200),Y(s.y+Math.sin(b)*4200)); cx.stroke();
+    }
+  }
   // --- contacts actually SEEN (visual), fading from memory ---
   for(const c of G.contacts){
     if(!c.alive || c.seen===undefined) continue;
-    const age=G.t-c.seen; if(age>25) continue;
-    const a=clamp(1-age/25,0,1), px=X(c.x),py=Y(c.y), esc=c.type==="escort";
-    cx.fillStyle= esc?`rgba(224,83,58,${0.4+0.6*a})`:`rgba(232,185,74,${0.4+0.6*a})`;
+    const age=G.t-c.seen; if(age>30) continue;
+    const a=clamp(1-age/25,0,1), fade=clamp((30-age)/7,0,1), px=X(c.x),py=Y(c.y), esc=c.type==="escort";
+    cx.fillStyle= esc?`rgba(224,83,58,${(0.4+0.6*a)*fade})`:`rgba(232,185,74,${(0.4+0.6*a)*fade})`;
     cx.strokeStyle=cx.fillStyle; cx.lineWidth=1.5*DPR;
     cx.beginPath(); cx.arc(px,py,4*DPR,0,TAU); cx.fill();
     cx.beginPath(); cx.moveTo(px,py);
     cx.lineTo(px+Math.cos(c.hdg)*11*DPR,py+Math.sin(c.hdg)*11*DPR); cx.stroke();
-    cx.fillStyle= esc?`rgba(224,83,58,${a})`:`rgba(232,185,74,${a})`;
+    cx.fillStyle= esc?`rgba(224,83,58,${a*fade})`:`rgba(232,185,74,${a*fade})`;
     cx.font=`${9*DPR}px monospace`; cx.textAlign="center";
     cx.fillText(c.sinking?"EN PERDITION":esc?"ESCORTE":c.kind==="battleship"?"CUIRASSÉ":c.kind==="cruiser"?"CROISEUR":c.kind==="cve"?"PORTE-AVIONS":c.kind==="cam"?"CAM-SHIP":c.kind==="neutral"?"NEUTRE":c.kind==="fisher"?"PÊCHEUR":c.kind==="troop"?"TRANSPORT":(c.kind==="qship"&&c.revealed)?"Q-SHIP":c.kind==="tanker"?"PÉTROLIER":"LIBERTY",px,py-9*DPR);
   }
@@ -2809,6 +2883,19 @@ function drawMap(){
     cx.restore();
     cx.fillStyle="rgba(120,200,255,.8)"; cx.font=`${8*DPR}px monospace`; cx.textAlign="right";
     cx.fillText("COURANT "+G.current.v.toFixed(1)+" m/s", ox+m-8*DPR, py+16*DPR);
+  }
+  // weather on the chart: whitecaps in heavy seas, haze veil in fog
+  {
+    const sea=G.env.weather.sea, fog=G.env.weather.fog;
+    if(sea>0.45){
+      cx.strokeStyle="rgba(220,235,240,"+(0.10+sea*0.14).toFixed(2)+")"; cx.lineWidth=1*DPR;
+      for(let k=0;k<44;k++){
+        const wx=((k*397+((G.t*22)|0)*(k%3+1))% (m|0)), wy=((k*263+((G.t*13)|0))% (m|0));
+        const px=ox+wx, py=oy+wy;
+        cx.beginPath(); cx.moveTo(px,py); cx.quadraticCurveTo(px+4*DPR,py-2*DPR,px+8*DPR,py); cx.stroke();
+      }
+    }
+    if(fog>0.4){ cx.fillStyle="rgba(150,160,158,"+(fog*0.10).toFixed(2)+")"; cx.fillRect(ox,oy,m,m); }
   }
   // smoke plumes
   for(const p of (G.smokes||[])){
@@ -2939,6 +3026,30 @@ function drawPeri(){
     g=cx.createLinearGradient(0,horizon,0,h);
     g.addColorStop(0,sea1); g.addColorStop(1,sea2);
     cx.fillStyle=g; cx.fillRect(0,horizon,w,h-horizon);
+    // whitecaps: broken water streaks, denser and larger as the sea builds
+    if(sea>0.25){
+      const rows=5, alpha=0.08+sea*0.22;
+      cx.strokeStyle="rgba(215,235,238,"+alpha.toFixed(2)+")";
+      for(let r2=0;r2<rows;r2++){
+        const ry2=horizon+(h-horizon)*Math.pow((r2+0.5)/rows,1.7);
+        const n2=Math.floor(3+sea*9), sp=w/n2, drift=((G.t*(14+r2*9))% (sp|0));
+        cx.lineWidth=(0.8+r2*0.5)*DPR;
+        for(let k=0;k<n2+1;k++){
+          const px2=((k*sp+drift+r2*57)%w), len=(5+r2*7)*DPR*(0.6+sea);
+          cx.beginPath(); cx.moveTo(px2,ry2);
+          cx.quadraticCurveTo(px2+len*0.5,ry2-2.4*DPR,px2+len,ry2); cx.stroke();
+        }
+      }
+    }
+    // rain: wind-driven streaks across the lens
+    if(env.weather.id==="rain"||env.weather.id==="storm"){
+      const n3=env.weather.id==="storm"?70:44, slant=(env.weather.id==="storm"?0.42:0.22)*w*0.06;
+      cx.strokeStyle="rgba(200,220,228,.16)"; cx.lineWidth=1*DPR;
+      for(let k=0;k<n3;k++){
+        const rx2=((k*211+((G.t*260)|0))%w), ry3=((k*127+((G.t*640)|0))%h);
+        cx.beginPath(); cx.moveTo(rx2,ry3); cx.lineTo(rx2-slant,ry3+h*0.05); cx.stroke();
+      }
+    }
     // a few stars at night
     if(light<0.3){ cx.fillStyle="rgba(220,230,240,.5)";
       for(let i=0;i<26;i++){ const sx2=(i*137.5)%w, sy2=(i*53.7)%horizon;
@@ -3025,6 +3136,45 @@ function drawPeri(){
       ptext(cx, left?"◄ proue":"proue ►", left?12*DPR:w-12*DPR, horizon+34*DPR, bowCol,13,left?"left":"right");
     }
 
+    // landmasses on the horizon: a dark irregular ridge when a coast or island is in view
+    for(const b of (G.terrain.blobs||[])){
+      if(b.reef) continue;
+      const dC=dist(s.x,s.y,b.x,b.y), rEff=(b.rx+b.ry)*0.5;
+      const dEdge=Math.max(0,dC-rEff), vr=currentVisRange();
+      if(dEdge>vr*1.1) continue;
+      const dir=angTo(s.x,s.y,b.x,b.y), rel=norm(dir-s.scope);
+      const halfAng=Math.min(1.5,Math.atan2(rEff,Math.max(dC,1)));
+      if(Math.abs(rel)>curFOV()/2+halfAng) continue;
+      const px=w*0.5+(rel/curFOV())*w, hw=(halfAng/curFOV())*w;
+      const near=clamp(1-dEdge/vr,0,1), hgt=h*(0.015+near*0.055);
+      const seed=(b.x*3.7)%TAU;
+      cx.fillStyle=mix("#0a0f0c", mix("#1a2735","#7d8e94",light), fog*0.55);
+      cx.beginPath(); cx.moveTo(px-hw,horizon);
+      for(let k=0;k<=16;k++){
+        const t2=k/16, vx=px-hw+t2*hw*2;
+        const ridge=Math.sin(t2*9+seed)*0.35+Math.sin(t2*17+seed*2)*0.2;
+        cx.lineTo(vx, horizon-hgt*(0.55+0.45*ridge));
+      }
+      cx.lineTo(px+hw,horizon); cx.closePath(); cx.fill();
+    }
+    // drift ice on the horizon: pale masses, visible far — you WANT to see these coming
+    for(const b of (G.bergs||[])){
+      const dM=dist(s.x,s.y,b.x,b.y), vr=currentVisRange()*1.15;
+      if(dM>vr||dM<30) continue;
+      const dir=angTo(s.x,s.y,b.x,b.y), rel=norm(dir-s.scope);
+      if(Math.abs(rel)>curFOV()/2+0.1) continue;
+      const px=w*0.5+(rel/curFOV())*w;
+      const scl=clamp(900/dM,0.15,2.6), bw=b.r*0.55*scl*DPR, bh=b.r*0.30*scl*DPR;
+      const seed=(b.x*5.1)%TAU;
+      cx.fillStyle="rgba(216,232,240,"+(0.55+0.3*clamp(1-dM/vr,0,1)).toFixed(2)+")";
+      cx.beginPath(); cx.moveTo(px-bw,horizon);
+      cx.lineTo(px-bw*0.5,horizon-bh*(0.7+0.3*Math.sin(seed)));
+      cx.lineTo(px-bw*0.1,horizon-bh*0.5);
+      cx.lineTo(px+bw*0.3,horizon-bh*(0.9+0.2*Math.sin(seed*2)));
+      cx.lineTo(px+bw,horizon); cx.closePath(); cx.fill();
+      cx.fillStyle="rgba(150,185,205,.35)";                     // waterline shadow
+      cx.fillRect(px-bw,horizon-1.5*DPR,bw*2,3*DPR);
+    }
     // Drumbeat: the American shore is still lit — a glow on the land side, windows twinkling
     if(G.scenario.drumbeat && G.cities && G.cities.length && todInfo(G.env.clock).light<0.45){
       const coastDir=angTo(s.x,s.y,G.cities[0].x, s.y*0.4+G.cities[2].y*0.6);
@@ -3039,6 +3189,13 @@ function drawPeri(){
         for(let i=0;i<14;i++){ const lx=cxp+((i*73)%160-80)/80*w*0.4, ly=horizon-2*DPR-((i*37)%3)*2*DPR;
           if(lx>0&&lx<w){ cx.fillRect(lx,ly,1.4*DPR,1.4*DPR); } }
       }
+    }
+    // a warped periscope: the image judders and ghosts until the gang trues it up
+    if(G.dmgScope){
+      cx.save(); cx.globalAlpha=0.25;
+      cx.drawImage(cvP, (Math.random()-.5)*7*DPR, (Math.random()-.5)*5*DPR);
+      cx.restore();
+      if(Math.random()<0.04) cx.fillRect(0,Math.random()*h,w,1.5*DPR);
     }
     // heavy swell washes over the lens at periscope depth
     if(s.depth>=6 && sea0>0.3){
@@ -3236,6 +3393,8 @@ function updateComms(dt){
    ])+
    stn("Avaries — équipe de réparation",[
      ["Voie d'eau", s.leak>0?"ACTIVE — colmatage":"Néant", s.leak>0?"bad":"ok"],
+     ["Périscope", G.dmgScope?"FAUSSÉ — réparation "+Math.ceil(G.dmgScope)+" s":"En état", G.dmgScope?"bad":"ok"],
+     ["Tubes avant", G.dmgTube!=null?"Tube "+(G.dmgTube+1)+" HS — "+Math.ceil(G.dmgTubeT)+" s":"Tous en état", G.dmgTube!=null?"amb":"ok"],
      ["Blessés", String(G.wounded||0), (G.wounded||0)>0?"amb":"ok"],
      ["Moral", (G.morale==null?100:Math.round(G.morale))+" %", G.morale<40?"bad":G.morale<70?"amb":"ok"],
      ["Incendie", s.fire>0?"ACTIF":"Néant", s.fire>0?"bad":"ok"],
@@ -3479,7 +3638,7 @@ function showBrief(){
       <a href="./guide.html" target="_blank" style="color:var(--phos);font-size:11.5px;letter-spacing:.06em">📘 Guide du commandant</a>
     </div>
     <div id="sndStat" style="text-align:center;margin-top:4px;font-size:10px;color:var(--txt-dim)"></div>
-    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v65</div>
+    <div style="text-align:center;margin-top:2px;font-size:10px;color:var(--phos)">build v68</div>
     ${COMMON_HINT}`;
   updateSndStat();
   const list=card.querySelector("#scenList");
