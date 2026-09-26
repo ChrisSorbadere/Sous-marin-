@@ -788,21 +788,22 @@ const WEATHERS=[
 ];
 function todInfo(h){
   h=((h%24)+24)%24;
-  if(h<5||h>=21){
-    const mo=(typeof G!=="undefined"&&G)?(G.moon==null?0.5:G.moon):0.5;
-    return {label: mo>0.7?"Nuit (pleine lune)":mo<0.25?"Nuit sans lune":"Nuit", light:0.06+mo*0.26};
-  }
-  if(h<7)        return {label:"Aube", light:0.50};
-  if(h<18)       return {label:"Jour", light:1.00};
-  if(h<19.5)     return {label:"Crépuscule", light:0.55};
-  return {label:"Soir", light:0.30};
+  const mo=(typeof G!=="undefined"&&G)?(G.moon==null?0.5:G.moon):0.5, N=0.06+mo*0.26;
+  // light follows the sun smoothly — no sudden drop at 18:00
+  const P=[[0,N],[4.5,N],[6,0.5],[7.5,1],[17.5,1],[18.75,0.55],[20,0.30],[21.5,N],[24,N]];
+  let light=N;
+  for(let i=0;i<P.length-1;i++) if(h>=P[i][0] && h<=P[i+1][0]){ const f=(h-P[i][0])/(P[i+1][0]-P[i][0]); light=P[i][1]+(P[i+1][1]-P[i][1])*f; break; }
+  const label = (h<5||h>=21) ? (mo>0.7?"Nuit (pleine lune)":mo<0.25?"Nuit sans lune":"Nuit")
+    : h<7?"Aube" : h<18?"Jour" : h<19.5?"Crépuscule" : "Soir";
+  return {label, light};
 }
 function currentVisRange(){
   const w=G.env.weather, t=todInfo(G.env.clock);
+  const vis = G.env.visCur!=null ? G.env.visCur : w.vis;
   let l=t.light;
   if(G.scenario && G.scenario.drumbeat && l<0.45) l=0.45;                 // ships silhouetted against the city glow
   if(G.sub && G.sub.scopeType==='obs' && l<0.5) l=Math.min(0.5,l*1.6);   // big observation scope gathers light
-  return clamp(VIS_BASE*w.vis*l, 650, WORLD*1.2);
+  return clamp(VIS_BASE*vis*l, 650, WORLD*1.2);
 }
 function grid(x,y){
   const fx=clamp(x/WORLD,0,0.9999), fy=clamp(y/WORLD,0,0.9999);
@@ -812,7 +813,7 @@ function grid(x,y){
 }
 
 /* ---------- radio intelligence (uncertain, sometimes false) ---------- */
-function aliveMerch(){ return G.contacts.filter(c=>c.type==="cargo"&&c.alive); }
+function aliveMerch(){ return G.contacts.filter(c=>c.type==="cargo"&&c.alive&&!c.withdraw); }
 function centroid(a){ return {x:a.reduce((s,k)=>s+k.x,0)/a.length, y:a.reduce((s,k)=>s+k.y,0)/a.length}; }
 function radioReport(){
   const m=aliveMerch();
@@ -1947,6 +1948,9 @@ function step(dt){
   const s=G.sub;
   G.t+=dt;
   G.env.clock += dt/600;                  // a sim-hour every ~10 min of play (dusk creeps in)
+  { const w=G.env.weather, k=Math.min(1,dt/100);            // fog banks and squalls build up slowly
+    G.env.visCur = G.env.visCur==null ? w.vis : G.env.visCur+(w.vis-G.env.visCur)*k;
+    G.env.fogCur = G.env.fogCur==null ? w.fog : G.env.fogCur+(w.fog-G.env.fogCur)*k; }
 
   // periscope bearing — rotates with hull but can be slewed independently of course
   s.scopeRel=norm(s.scopeRel + G.scopeRot*1.1*dt);
@@ -2200,8 +2204,8 @@ function step(dt){
           const ex = c.x<200 ? -1 : c.x>WORLD-200 ? 1 : 0, ey = c.y<200 ? -1 : c.y>WORLD-200 ? 1 : 0;
           c.leaveHdg = Math.atan2(ey||0.0001, ex||(ey?0.0001:1));
           if(!c.withdraw) say("Un "+shipLabel(c).toLowerCase()+" s'échappe hors du secteur.","cmd"); } }
-      if(c.leaving && (c.x<-500||c.x>WORLD+500||c.y<-500||c.y>WORLD+500)){
-        c.fled=true; c.alive=false; G.escaped++; }
+      if(c.leaving && (c.x<-500||c.x>WORLD+500||c.y<-500||c.y>WORLD+500) && outOfSight(c)){
+        c.fled=true; c.alive=false; if(!c.withdraw) G.escaped++; }
     } else {
       escortAI(c,dt);
     }
@@ -2243,7 +2247,7 @@ function step(dt){
     if(G.scenario.duel){
       if(!G.contacts.some(c=>c.type==="escort"&&c.alive)) disperseConvoy(true);
     } else if(G.scenario.merchants>0 || G.scenario.anchorage || G.scenario.river){
-      const reachable=G.contacts.some(c=>c.type==="cargo"&&c.alive&&!c.loner);
+      const reachable=G.contacts.some(c=>c.type==="cargo"&&c.alive&&!c.loner&&!c.withdraw);
       if(!reachable) disperseConvoy(G.merchSunk>=G.need);
     }
   }
@@ -2339,6 +2343,7 @@ function step(dt){
   updateMission(dt);
   updateEvents(dt);
   if(tutoStep>=0 && TUTO[tutoStep].done()) tutoAdvance();
+  G.ghosts=(G.ghosts||[]).filter(g=>{ g.t+=dt; if(Math.random()<dt*2) G.smokes.push({x:g.x+(Math.random()-.5)*30,y:g.y,t:5+Math.random()*4,drift:(Math.random()-.3)*8,r:18+Math.random()*24}); return g.t<g.T; });
   G.smokes=(G.smokes||[]).filter(p=>{ p.t-=dt; p.y-=6*dt; p.x+=p.drift*dt; return p.t>0; });
   for(const c of G.contacts){ if(c.alive && c.smoke && Math.random()<dt*3)
     G.smokes.push({x:c.x+(Math.random()-.5)*30, y:c.y-10, t:6+Math.random()*4, drift:(Math.random()-.3)*8, r:20+Math.random()*30}); }
@@ -2467,7 +2472,7 @@ function escortAI(c,dt){
     const ex=c.x<WORLD/2?-100:WORLD+100, ey=c.y<WORLD/2?-100:WORLD+100;
     const toX=Math.min(c.x,WORLD-c.x)<Math.min(c.y,WORLD-c.y);
     tx=toX?ex:c.x; ty=toX?c.y:ey; spd=12; turn=0.06;
-    if(c.x<-500||c.x>WORLD+500||c.y<-500||c.y>WORLD+500){ c.alive=false; }
+    if((c.x<-500||c.x>WORLD+500||c.y<-500||c.y>WORLD+500) && outOfSight(c)){ c.alive=false; }
   } else {
     detLockSaid=false;
     if(G.scenario.duel){
@@ -2517,6 +2522,9 @@ function steerTo(c,want,dt,frac){
   const tau=c.type==="escort"?6:14;                           // seconds for the rudder & hull to answer
   c.rot=(c.rot||0)+(desired-(c.rot||0))*Math.min(1,dt/tau);
   c.hdg=norm(c.hdg+c.rot*dt);
+}
+function outOfSight(c){
+  const s=G.sub; return dist(s.x,s.y,c.x,c.y) > Math.max(currentVisRange()*1.25, 3000);
 }
 function hazardWant(c,want){
   const z=G.mineZone; if(!z) return want;
@@ -2682,6 +2690,7 @@ function startSinking(c){
   say("TORPILLE AU BUT ! Le "+shipName(c)+" stoppe et prend de la bande"+(c.burning?" — il brûle !":"…"),"alarm");
 }
 function sinkAllied(c){
+  sinkGhost(c);
   c.alive=false; surfBoom(); 
   G.explosions.push({x:c.x,y:c.y,life:2.6,max:2.6}); G.wrecks.push({x:c.x,y:c.y,life:600});
   if(c.type==="cargo"){ G.merchSunk++; G.det=clamp(G.det-8,0,100);   // escorts turn away
@@ -2717,8 +2726,16 @@ function shipInfo(c){
 }
 function shipName(c){ return (c.kind==="qship"&&!c.revealed) ? shipInfo(c).nm : shipInfo(c).nm; }
 function shipLabel(c){ return c.type==="escort" ? "Escorte" : c.kind==="battleship" ? "Cuirassé" : c.kind==="cruiser" ? "Croiseur" : c.kind==="cve" ? "Porte-avions" : c.kind==="cam" ? "CAM-ship" : c.kind==="neutral" ? "Neutre — "+(c.flag||"?") : c.kind==="fisher" ? "Bateau de pêche" : c.kind==="troop" ? "Transport de troupes" : (c.kind==="qship"&&c.revealed) ? "Q-ship" : c.kind==="tanker" ? "Pétrolier" : "Cargo"; }
+function sinkGhost(c){
+  // the hull keeps settling on screen after the kill: bow up, masts last, bubbles and smoke
+  const s0 = c.sinking && c.sinkT0 ? clamp(1-c.sinkT/c.sinkT0,0,1) : 0;
+  G.ghosts=G.ghosts||[];
+  G.ghosts.push({x:c.x,y:c.y,hdg:c.hdg,type:c.type,kind:c.kind,tons:c.tons,broken:c.broken||Math.random()<0.3,
+    burning:c.burning, v0:Math.max(s0,0.15), t:0, T:s0>0.8?30:70});
+}
 function sinkShip(c,slow){
   duck(2); play("naufrage",.8,false);
+  sinkGhost(c);
   c.alive=false;
   if(!G.over){
     achieve("premier");
@@ -2798,7 +2815,10 @@ function disperseConvoy(success){
               : "Le convoi s'est échappé. On poursuit la patrouille.","cmd");
 }
 function nextConvoy(){
-  G.contacts=[]; G.sound=[]; G.intel=[]; G.det=Math.min(G.det,12);
+  G.contacts=G.contacts.filter(c=>c.alive);            // survivors of the last fight keep sailing away, visibly
+  for(const c of G.contacts) if(!c.loner){ c.withdraw=true;
+    if(c.type==='cargo' && !c.leaving){ c.leaving=true; c.leaveHdg=c.hdg; } }
+  G.sound=[]; G.intel=[]; G.det=Math.min(G.det,12);
   G.merchSunk=0; G.convoyNum=(G.convoyNum||1)+1; G.phase="attack";
   spawnConvoy(G.scenario);
   if(G.scenario.duel){ G.det=Math.max(G.det,42); say("Un nouveau destroyer fait route sur vous.","alarm"); }
@@ -3522,7 +3542,7 @@ function drawPeri(){
   if(up){
     cx.save(); if(roll){ cx.translate(w/2,horizon); cx.rotate(roll); cx.translate(-w/2,-horizon); }
     const env=G.env, tod=todInfo(env.clock), light=tod.light, visR=currentVisRange();
-    const fog=env.weather.fog, sea=env.weather.sea;
+    const fog=env.fogCur!=null?env.fogCur:env.weather.fog, sea=env.weather.sea;
     // sky tinted by time of day
     const sky1=mix("#1a2735","#7d8e94",light), sky2=mix("#26323a","#aeb7b4",light);
     let g=cx.createLinearGradient(0,0,0,horizon);
@@ -3649,6 +3669,19 @@ function drawPeri(){
       if(dM<=visR && Math.abs(rel)<Math.abs(cRel)){ cRel=rel; centered={c,dM}; }
     }
     G.lastDrawn=drawn;
+    for(const g of (G.ghosts||[])){
+      const rel=norm(angTo(s.x,s.y,g.x,g.y)-s.scope), dM=dist(s.x,s.y,g.x,g.y);
+      if(Math.abs(rel)>FOV || dM>visR*1.15) continue;
+      const px=half+(rel/FOV)*half, scale=clamp(1600/dM,0.22,3.2)*(g.kind==="fisher"?0.35:1);
+      const asp=norm(g.hdg-angTo(s.x,s.y,g.x,g.y)), sn=Math.sin(asp), xs=clamp(sn/0.10,-1,1)*(0.10+0.90*Math.abs(sn));
+      const v=g.v0+(1.12-g.v0)*Math.pow(g.t/g.T,1.5);          // slow list, then the final plunge
+      cx.globalAlpha=clamp(1-(dM/visR)*(0.6+fog*0.5),0.05,1)*clamp((g.T-g.t)/6,0,1);
+      drawShipSil(cx,px,horizon,scale*DPR,g,xs,v);
+      cx.fillStyle="rgba(215,232,238,.55)";                      // air bursting out as she goes
+      for(let k=0;k<5;k++){ cx.beginPath(); cx.arc(px+(k-2)*7*scale*DPR+Math.sin(G.t*4+k)*2*DPR,horizon-((G.t*30+k*9)%14)*scale*DPR*0.4,1.6*scale*DPR,0,TAU); cx.fill(); }
+      if(g.burning && v<1.2){ cx.fillStyle=`rgba(255,150,40,${(0.5+0.4*Math.sin(G.t*9)).toFixed(2)})`; cx.beginPath(); cx.arc(px,horizon-4*scale*DPR,3.5*scale*DPR,0,TAU); cx.fill(); }
+      cx.globalAlpha=1;
+    }
     drawn.sort((a,b)=>b.dM-a.dM);
     for(const o of drawn){
       const px=half+(o.rel/FOV)*half;
@@ -3916,8 +3949,10 @@ function drawBlast(cx,x,base,sc,prog){
 function drawShipSil(cx,x,base,sc,c,xscale,sink01){
   const type=c.type, kind=c.kind, broken=c.broken;
   const wsh=46*sc, hsh=10*sc;
-  cx.save(); cx.translate(x,base);
-  if(sink01){ cx.translate(0,hsh*2.6*sink01); cx.rotate((broken?0.6:0.30)*sink01*Math.sign(xscale||1)); }
+  cx.save();
+  if(sink01){ cx.beginPath(); cx.rect(x-wsh*3,base-hsh*12,wsh*6,hsh*12+Math.max(1,hsh*0.25)); cx.clip(); }   // what's below the waterline is gone
+  cx.translate(x,base);
+  if(sink01){ cx.translate(0,hsh*2.6*sink01); cx.rotate((broken?0.6:0.30)*Math.min(sink01,1.2)*Math.sign(xscale||1)); }
   cx.scale(xscale,1); cx.fillStyle="#0d1417";
   const hull=(w2,h2,bowRise)=>{ cx.beginPath(); cx.moveTo(-w2,0); cx.lineTo(w2*0.9,0); cx.lineTo(w2,-h2*(1+bowRise)); cx.lineTo(w2*0.7,-h2); cx.lineTo(-w2*0.92,-h2); cx.closePath(); cx.fill(); };
   const box=(x0,y0,bw,bh)=>cx.fillRect(x0,y0,bw,bh);
@@ -4258,6 +4293,7 @@ function resumePatrol(){
   G.dcs=[];
   if(!G.cities) G.cities=[];
   if(!G.smokes) G.smokes=[];
+  if(!G.ghosts) G.ghosts=[];
   if(G.scenario.camp && !G.era) G.era=eraFor(G.scenario.campYear);
   if(!G.diff) G.diff=DIFFS[loadDiff()];
   if(!G.allies) G.allies=[];
@@ -4401,7 +4437,7 @@ function showBrief(){
       <button class="go" id="resetCar" style="padding:9px 6px;font-size:11.5px;color:#d98a76">↺ Réinit.</button>
     </div>
     ${QUICK_HINT}
-    <div style="text-align:center;margin-top:8px;font-size:10px;color:var(--phos)">build v75</div>`;
+    <div style="text-align:center;margin-top:8px;font-size:10px;color:var(--phos)">build v76</div>`;
   updateSndStat();
   const list=card.querySelector("#scenList");
   const add=(html,cls,fn)=>{ const b=document.createElement("button"); b.className="go "+(cls||""); b.innerHTML=html; b.onclick=fn; list.appendChild(b); return b; };
