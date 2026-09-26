@@ -180,10 +180,11 @@
   /* ---- message log ---- */
   #log{position:absolute;left:8px;right:8px;bottom:58px;pointer-events:none;
     display:flex;flex-direction:column;gap:3px;z-index:8}
-  .msg{align-self:flex-start;max-width:92%;background:rgba(8,14,10,.86);
+  .msg{pointer-events:auto;cursor:pointer;align-self:flex-start;max-width:92%;background:rgba(8,14,10,.86);
     border-left:3px solid var(--phos-d);padding:4px 9px;font-size:11px;
     color:var(--phos);letter-spacing:.02em;animation:fade 7s forwards}
   body.bigtxt .msg{font-size:13px;padding:5px 10px}
+  body.msgshort .msg{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;padding:3px 8px;font-size:10.5px}
   .msg .who{display:inline-block;font-size:8.5px;letter-spacing:.12em;color:#cfe;opacity:.75;margin-right:6px;
     border:1px solid currentColor;border-radius:2px;padding:0 3px;vertical-align:1px}
   .msg.cmd{border-left-color:var(--amber);color:var(--amber)}
@@ -499,7 +500,7 @@ const TORP_SPD=14;          // m/s (~27 kn)
 const TORP_RANGE=3200;      // m
 
 /* ---------- player options (persisted) ---------- */
-const OPT_DEF={vMaster:1, vAmb:0.9, vFx:1, vVox:1, vib:true, aids:true, redNight:true, tc16:false, bigTxt:false};
+const OPT_DEF={vMaster:1, vAmb:0.9, vFx:1, vVox:1, vib:true, aids:true, redNight:true, tc16:false, bigTxt:false, msgMode:"full"};
 let OPT=(()=>{ try{ return Object.assign({},OPT_DEF,JSON.parse(localStorage.getItem("uboot_opt"))||{}); }catch(e){ return Object.assign({},OPT_DEF); } })();
 function saveOpt(){ try{ localStorage.setItem("uboot_opt",JSON.stringify(OPT)); }catch(e){} applyOpt(); }
 function applyOpt(){
@@ -508,6 +509,7 @@ function applyOpt(){
   if(voxBus) voxBus.gain.value=OPT.vVox;
   if(ambUser) ambUser.gain.value=OPT.vAmb;
   document.body.classList.toggle("bigtxt",!!OPT.bigTxt);
+  document.body.classList.toggle("msgshort",OPT.msgMode==="short");
 }
 
 /* ---------- audio : real samples (sons/) + underwater reverb ---------- */
@@ -1508,9 +1510,15 @@ function say(txt,cls=""){
   const who=speaker(txt);
   if(who){ const w=document.createElement("span"); w.className="who"; w.textContent=who.tag; d.appendChild(w); }
   d.appendChild(document.createTextNode(txt));
-  logEl.appendChild(d);
-  setTimeout(()=>d.remove(),7000);
-  while(logEl.children.length>4) logEl.firstChild.remove();
+  const mode=OPT.msgMode||"full";
+  if(mode!=="log" || cls==="alarm"){                  // "journal only" still shows the critical alarms
+    const life = mode==="short" ? 4000 : cls==="alarm" ? 6500 : 5000;
+    d.style.animationDuration=life+"ms";
+    logEl.appendChild(d);
+    setTimeout(()=>d.remove(),life);
+    const maxN = mode==="short" ? 1 : mode==="log" ? 1 : 3;
+    while(logEl.children.length>maxN) logEl.firstChild.remove();
+  }
   if(G && G.env){                                   // ship's log: everything said is written down
     if(!G.eventLog) G.eventLog=[];
     const hh=Math.floor(((G.env.clock%24)+24)%24), mm=Math.floor((G.env.clock%1)*60);
@@ -1520,11 +1528,12 @@ function say(txt,cls=""){
 }
 
 /* ---------- input ---------- */
-// a tap anywhere clears the current on-screen messages (until the next one)
-document.getElementById("stage").addEventListener("pointerdown",()=>{
+// tapping a message clears the messages on screen (the full text stays in the 📜 journal)
+document.getElementById("log").addEventListener("pointerdown",e=>{
+  e.stopPropagation(); e.preventDefault();
   const l=document.getElementById("log");
   while(l.firstChild) l.firstChild.remove();
-},true);
+});
 document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
   document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("on",x===t));
   document.querySelectorAll(".view").forEach(v=>v.classList.toggle("on",v.dataset.v===t.dataset.v));
@@ -2152,8 +2161,8 @@ function step(dt){
   }
   G.torps=G.torps.filter(t=>!t.dead);
 
-  // convoy zigzag plan (throws off the firing solution)
-  G.zigT-=dt; if(G.zigT<=0){ G.zigDir*=-1; G.zig=G.zigDir*0.34; G.zigT=16+Math.random()*16; }
+  // convoy zigzag plan: long legs of several minutes, as the convoy commodore ordered them
+  G.zigT-=dt; if(G.zigT<=0){ G.zigDir*=-1; G.zig=G.zigDir*(0.35+Math.random()*0.35); G.zigT=180+Math.random()*300; }
   const convoyHdg=norm(G.convoyBase+G.zig);
 
   // ---- contacts AI ----
@@ -2161,33 +2170,35 @@ function step(dt){
     if(!c.alive) continue;
     if(c.type==="cargo" && c.moored) continue;               // moored: dead still until torpedoed
     if(c.type==="cargo"){
-      if(c.loner && !c.sinking){                      // neutrals & fishermen wander their own way
+      let want=null;                                          // the course the master wants — the helm gets there slowly
+      if(c.sinking){ want=null; }
+      else if(c.leaving){ want=c.leaveHdg!=null?c.leaveHdg:c.hdg; }
+      else if(c.loner){                                       // neutrals & fishermen wander their own way
         c.wT=(c.wT||0)-dt;
-        if(c.wT<=0){ c.wT=25+Math.random()*30; c.wHdg=norm(c.hdg+(Math.random()-.5)*1.2); }
-        c.hdg=norm(c.hdg+clamp(norm((c.wHdg==null?c.hdg:c.wHdg)-c.hdg),-0.04*dif().turn*dt,0.04*dif().turn*dt));
-      } else if(c.riverLane && !c.sinking){                 // hold the channel axis
-        const axis=c.hdg>0?Math.PI/2:-Math.PI/2;
-        const corr=clamp((WORLD*0.5-c.x)/900,-0.5,0.5)*(c.hdg>0?-1:1);
-        c.hdg=norm(c.hdg+clamp(norm(axis+corr-c.hdg),-0.10*dif().turn*dt,0.10*dif().turn*dt));
-      } else if(c.leaving && !c.sinking){ /* hold her outbound course off the chart */ }
-      else if(c.evadeT>0){ c.evadeT-=dt;
-        c.hdg=norm(c.hdg+clamp(norm(c.evHdg-c.hdg),-0.07*dif().turn*dt,0.07*dif().turn*dt));  // hard rudder — but 8000 tons answer slowly
-      } else if(c.sinking){ /* dead in the water */ }
-      else c.hdg=norm(c.hdg+clamp(norm(convoyHdg-c.hdg),-0.06*dif().turn*dt,0.06*dif().turn*dt));   // steer onto the zigzag leg
-      avoidHazards(c,dt);
-      if(!c.withdraw){                       // stay in the sector while the fight is on
-        const cxm=WORLD/2, edge=Math.min(c.x,WORLD-c.x,c.y,WORLD-c.y);
-        if(edge<350){ const inw=angTo(c.x,c.y,cxm,cxm);
-          c.hdg=norm(c.hdg+clamp(norm(inw-c.hdg),-0.08*dif().turn*dt,0.08*dif().turn*dt)); }
+        if(c.wT<=0){ c.wT=160+Math.random()*200; c.wHdg=norm(c.hdg+(Math.random()-.5)*1.0); }
+        want=c.wHdg==null?c.hdg:c.wHdg;
+      } else if(c.riverLane){                                 // hold the channel axis
+        const axis=Math.cos(c.hdg-Math.PI/2)>=0?Math.PI/2:-Math.PI/2;
+        const corr=clamp(((c.laneX||WORLD*0.5)-c.x)/900,-0.4,0.4)*(axis>0?-1:1);
+        want=norm(axis+corr);
+      } else if(c.evadeT>0){ c.evadeT-=dt; want=c.evHdg; }    // emergency turn — full rudder, but 8 000 t answer slowly
+      else want=convoyHdg;                                    // steer onto the zigzag leg
+      if(want!=null){
+        want=hazardWant(c,want);
+        if(!c.withdraw && !c.leaving){                        // stay in the sector while the fight is on
+          const cxm=WORLD/2, edge=Math.min(c.x,WORLD-c.x,c.y,WORLD-c.y);
+          if(edge<500) want=angTo(c.x,c.y,cxm,cxm);
+        }
+        steerTo(c,want,dt);
       }
       const spdEff = c.sinking?0.4 : (c.evadeT>0?7.2:c.spd);            // flank speed under attack
       const cnx=c.x+Math.cos(c.hdg)*spdEff*KN*dt, cny=c.y+Math.sin(c.hdg)*spdEff*KN*dt;
-      if(!landAt(cnx,cny)){ c.x=cnx; c.y=cny; } else { c.hdg=norm(c.hdg+0.5); }
+      if(!landAt(cnx,cny)){ c.x=cnx; c.y=cny; } else { c.rot=turnMax(c)*(c.rot<0?-1:1); c.wHdg=norm(c.hdg+Math.PI*0.6); }
       if(c.x<60||c.x>WORLD-60||c.y<60||c.y>WORLD-60){
-        if(c.loner && !c.withdraw){ c.wHdg=angTo(c.x,c.y,WORLD/2,WORLD/2); c.hdg=c.wHdg; }
+        if(c.loner && !c.withdraw){ c.wHdg=angTo(c.x,c.y,WORLD/2,WORLD/2); }
         else if(!c.leaving){ c.leaving=true;                        // she sails off the chart, no vanishing act
           const ex = c.x<200 ? -1 : c.x>WORLD-200 ? 1 : 0, ey = c.y<200 ? -1 : c.y>WORLD-200 ? 1 : 0;
-          c.hdg = Math.atan2(ey||0.0001, ex||(ey?0.0001:1));          // point her straight off the edge
+          c.leaveHdg = Math.atan2(ey||0.0001, ex||(ey?0.0001:1));
           if(!c.withdraw) say("Un "+shipLabel(c).toLowerCase()+" s'échappe hors du secteur.","cmd"); } }
       if(c.leaving && (c.x<-500||c.x>WORLD+500||c.y<-500||c.y>WORLD+500)){
         c.fled=true; c.alive=false; G.escaped++; }
@@ -2487,20 +2498,30 @@ function escortAI(c,dt){
     }
     if(!G.scenario.duel){ tx=c.px||WORLD*0.5; ty=c.py||WORLD*0.4; spd=8; turn=0.05; }
   }
-  // steer with a limited turn rate — a ship cannot pivot on the spot
-  const da=norm(angTo(c.x,c.y,tx,ty)-c.hdg);
-  c.hdg=norm(c.hdg+clamp(da,-turn*dt,turn*dt));
-  avoidHazards(c,dt);
+  // steer with a limited rate of turn and rudder lag — a ship cannot pivot on the spot
+  steerTo(c, hazardWant(c,angTo(c.x,c.y,tx,ty)), dt, c.state==="hunt"?1:0.75);
   const enx=clamp(c.x+Math.cos(c.hdg)*spd*KN*dt,20,WORLD-20);
   const eny=clamp(c.y+Math.sin(c.hdg)*spd*KN*dt,20,WORLD-20);
-  if(!landAt(enx,eny)){ c.x=enx; c.y=eny; } else { c.hdg=norm(c.hdg+1.0); c.fixT=0; }
+  if(!landAt(enx,eny)){ c.x=enx; c.y=eny; } else { c.rot=turnMax(c); c.fixT=0; }
 }
-function avoidHazards(c,dt){
-  // convoys skirt a known minefield; shoals/reefs are passable to surface ships
-  const z=G.mineZone; if(!z) return;
+/* ---- ship handling: realistic rates of turn, and a rudder that takes time to bite ---- */
+function turnMax(c){                                          // rad per sim-second at full rudder
+  let deg;
+  if(c.type==="escort") deg=(c.tons||1300)>=1250 ? 3.4 : 3.0;
+  else deg=({tanker:0.8, troop:0.9, battleship:0.85, cruiser:1.4, cve:1.1, fisher:2.5})[c.kind]||1.0;
+  return deg*D2R*dif().turn;
+}
+function steerTo(c,want,dt,frac){
+  const max=turnMax(c)*(frac||1), err=norm(want-c.hdg);
+  const desired=clamp(err*0.25,-max,max);                     // ease off the rudder as she comes onto the new course
+  const tau=c.type==="escort"?6:14;                           // seconds for the rudder & hull to answer
+  c.rot=(c.rot||0)+(desired-(c.rot||0))*Math.min(1,dt/tau);
+  c.hdg=norm(c.hdg+c.rot*dt);
+}
+function hazardWant(c,want){
+  const z=G.mineZone; if(!z) return want;
   const d=dist(c.x,c.y,z.x,z.y);
-  if(d < z.r+300){ const away=angTo(z.x,z.y,c.x,c.y);
-    c.hdg=norm(c.hdg + clamp(norm(away-c.hdg),-0.09*dif().turn*dt,0.09*dif().turn*dt)); }
+  return d<z.r+400 ? angTo(z.x,z.y,c.x,c.y) : want;
 }
 function dropCharges(c){
   crew("vx_wabos",1.2);
@@ -4295,11 +4316,11 @@ function saveUpg(u){ try{ localStorage.setItem("uboot_upg",JSON.stringify(u)); }
 function hasUpg(id){ if(!UPG_CACHE) UPG_CACHE=loadUpg().owned; return UPG_CACHE.indexOf(id)>=0; }
 function crushDepth(){ return CRUSH + (hasUpg('hull2')?30:0); }
 const DIFFS={
-  recrue:  {id:"recrue",  name:"Recrue",  turn:0.45, esc:-1, plane:2.1, dc:1.35,
+  recrue:  {id:"recrue",  name:"Recrue",  turn:0.8, esc:-1, plane:2.1, dc:1.35,
             line:"Navires lourds à la manœuvre, avions annoncés de loin, escortes prudentes."},
-  officier:{id:"officier",name:"Officier",turn:0.70, esc:0,  plane:1.5, dc:1.0,
+  officier:{id:"officier",name:"Officier",turn:1.0, esc:0,  plane:1.5, dc:1.0,
             line:"L'équilibre : inertie crédible, préavis correct, chasse sérieuse."},
-  as:      {id:"as",      name:"As",      turn:1.0,  esc:1,  plane:1.0, dc:0.85,
+  as:      {id:"as",      name:"As",      turn:1.25,  esc:1,  plane:1.0, dc:0.85,
             line:"Ennemis vifs, avions fondus du soleil, grenadages rapprochés."}
 };
 function loadDiff(){ try{ const d=localStorage.getItem("uboot_diff"); return DIFFS[d]?d:"officier"; }catch(e){ return "officier"; } }
@@ -4380,7 +4401,7 @@ function showBrief(){
       <button class="go" id="resetCar" style="padding:9px 6px;font-size:11.5px;color:#d98a76">↺ Réinit.</button>
     </div>
     ${QUICK_HINT}
-    <div style="text-align:center;margin-top:8px;font-size:10px;color:var(--phos)">build v74</div>`;
+    <div style="text-align:center;margin-top:8px;font-size:10px;color:var(--phos)">build v75</div>`;
   updateSndStat();
   const list=card.querySelector("#scenList");
   const add=(html,cls,fn)=>{ const b=document.createElement("button"); b.className="go "+(cls||""); b.innerHTML=html; b.onclick=fn; list.appendChild(b); return b; };
@@ -4522,6 +4543,10 @@ function showOptions(){
     <div class="sub">Son · confort · aides</div>
     <div class="optGrp">Volumes</div>
     ${sl("vMaster","Général")}${sl("vAmb","Ambiances (mer, moteurs)")}${sl("vFx","Effets (armes, alarmes)")}${sl("vVox","Voix de l'équipage")}
+    <div class="optGrp">Messages à l'écran</div>
+    <div class="diffRow" style="margin:4px 0 2px">${[["full","Complets"],["short","Courts"],["log","Journal seul"]].map(([k,l])=>
+      `<button class="chip${(OPT.msgMode||"full")===k?" on":""}" data-msg="${k}">${l}</button>`).join("")}</div>
+    <div class="diffLine" style="text-align:left">Toucher un message l'efface. Tout reste lisible dans le 📜 journal de quart (carte). « Journal seul » n'affiche que les alertes critiques.</div>
     <div class="optGrp">Confort</div>
     ${tg("vib","Vibrations","secousses, Asdic, tirs")}
     ${tg("redNight","Éclairage rouge de nuit","le poste passe au rouge la nuit")}
@@ -4535,6 +4560,7 @@ function showOptions(){
     r.onchange=()=>{ saveOpt(); if(r.dataset.opt==="vVox") crew("vx_los",1); else if(r.dataset.opt==="vFx") ping(900,.1); else uiClick(0.3); };
   });
   card.querySelectorAll("[data-tgl]").forEach(b=>b.onclick=()=>{ const k=b.dataset.tgl; OPT[k]=!OPT[k]; saveOpt(); showOptions(); });
+  card.querySelectorAll("[data-msg]").forEach(b=>b.onclick=()=>{ OPT.msgMode=b.dataset.msg; saveOpt(); showOptions(); });
   $("#backBtn").onclick=showBrief;
 }
 function showUpgrades(){
